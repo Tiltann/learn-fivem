@@ -1,25 +1,31 @@
 # 03. Project: NUI Menu
 
-Build an HTML-based menu. Not ox_lib context, real NUI. Purpose: learn the Lua <-> NUI round trip, focus handling, and visibility pattern.
+## Goal
 
-Scope: `/garage` command opens a list of vehicles. Click one = spawn. Close button + ESC.
+Build an **HTML-based menu** (not an `ox_lib` context menu — actual NUI). Purpose: learn the Lua ↔ NUI round trip, focus handling, and the visibility pattern.
 
-Vanilla HTML/JS (no React). Once you nail this, upgrade to React with `07-nui/02-react-nui.md`.
+Scope: `/garage` opens a list of vehicles; clicking one spawns the car next to the player. Close button + ESC support.
+
+This uses **vanilla HTML/JS** (no React) so the moving parts are obvious. Once you've got this working, upgrade to React with [`07-nui/02-react-nui.md`](../07-nui/02-react-nui.md).
+
+---
 
 ## Folder
 
 ```
-resources\[test]\my_garage\
+resources/[test]/my_garage/
 ├── fxmanifest.lua
-├── client\main.lua
-├── server\main.lua
-└── html\
+├── client/main.lua
+├── server/main.lua
+└── html/
     ├── index.html
     ├── app.js
     └── style.css
 ```
 
-## fxmanifest.lua
+---
+
+## `fxmanifest.lua`
 
 ```lua
 fx_version 'cerulean'
@@ -31,16 +37,18 @@ shared_script '@ox_lib/init.lua'
 client_script 'client/main.lua'
 server_script 'server/main.lua'
 
-ui_page 'html/index.html'
+ui_page 'html/index.html'                                       -- entry HTML
 
-files {
+files {                                                          -- everything the browser is allowed to load
     'html/index.html',
     'html/app.js',
     'html/style.css',
 }
 ```
 
-## html/index.html
+---
+
+## `html/index.html`
 
 ```html
 <!DOCTYPE html>
@@ -50,6 +58,7 @@ files {
     <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+    <!-- root container starts hidden via the .hidden class -->
     <div id="root" class="hidden">
         <div class="panel">
             <header>
@@ -64,7 +73,9 @@ files {
 </html>
 ```
 
-## html/style.css
+---
+
+## `html/style.css`
 
 ```css
 html, body {
@@ -72,7 +83,7 @@ html, body {
     padding: 0;
     width: 100vw;
     height: 100vh;
-    background: transparent;
+    background: transparent;            /* CRITICAL — without this, black screen over the game */
     font-family: 'Segoe UI', sans-serif;
 }
 
@@ -82,11 +93,11 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.5);     /* semi-transparent overlay so the game dims behind the menu */
 }
 
 .hidden {
-    visibility: hidden;
+    visibility: hidden;                 /* NOT display:none — keep listeners alive */
 }
 
 .panel {
@@ -114,26 +125,26 @@ header h1 { margin: 0; font-size: 20px; }
 #close-btn {
     background: transparent;
     color: white;
-    border: 1px solid rgba(255,255,255,0.2);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     padding: 4px 10px;
     cursor: pointer;
     border-radius: 4px;
 }
-#close-btn:hover { background: rgba(255,255,255,0.1); }
+#close-btn:hover { background: rgba(255, 255, 255, 0.1); }
 
 #vehicle-list {
     list-style: none;
     padding: 0;
     margin: 0;
     max-height: 400px;
-    overflow-y: auto;
+    overflow-y: auto;                   /* scroll if too many vehicles */
 }
 
 #vehicle-list li {
     padding: 12px 14px;
     margin: 6px 0;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 6px;
     display: flex;
     justify-content: space-between;
@@ -142,7 +153,7 @@ header h1 { margin: 0; font-size: 20px; }
     transition: background 0.15s;
 }
 
-#vehicle-list li:hover { background: rgba(255,255,255,0.08); }
+#vehicle-list li:hover { background: rgba(255, 255, 255, 0.08); }
 
 #vehicle-list .plate {
     font-family: monospace;
@@ -151,13 +162,17 @@ header h1 { margin: 0; font-size: 20px; }
 }
 ```
 
-## html/app.js
+---
+
+## `html/app.js`
 
 ```javascript
+// grab DOM nodes once
 const root = document.getElementById('root');
 const listEl = document.getElementById('vehicle-list');
 const closeBtn = document.getElementById('close-btn');
 
+// helper: send a callback to Lua via fetch (with try/catch — CEF can hiccup)
 async function fetchNui(callback, data) {
     try {
         const res = await fetch(`https://${GetParentResourceName()}/${callback}`, {
@@ -173,14 +188,16 @@ async function fetchNui(callback, data) {
     }
 }
 
+// build the list of vehicles
 function render(vehicles) {
-    listEl.innerHTML = '';
+    listEl.innerHTML = '';                                      // clear previous
     for (const v of vehicles) {
         const li = document.createElement('li');
         li.innerHTML = `
             <span>${v.label}</span>
             <span class="plate">${v.plate || ''}</span>
         `;
+        // clicking a vehicle = ask Lua to spawn it
         li.addEventListener('click', () => {
             fetchNui('spawn', { model: v.model });
         });
@@ -188,117 +205,140 @@ function render(vehicles) {
     }
 }
 
+// listen for messages from Lua
 window.addEventListener('message', (e) => {
     const { action, payload } = e.data;
     if (action === 'open') {
         render(payload.vehicles || []);
-        root.classList.remove('hidden');
+        root.classList.remove('hidden');                        // show
     } else if (action === 'close') {
-        root.classList.add('hidden');
+        root.classList.add('hidden');                           // hide
     }
 });
 
+// close button
 closeBtn.addEventListener('click', () => fetchNui('close'));
 
+// ESC closes
 window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') fetchNui('close');
 });
 ```
 
-## client/main.lua
+---
+
+## `client/main.lua`
 
 ```lua
-local isOpen = false
-local spawnedVeh
+local isOpen = false                                            -- track UI state
+local spawnedVeh                                                -- handle to last-spawned vehicle (for cleanup)
 
+-- ↓ centralize close logic
 local function closeUI()
     isOpen = false
-    SetNuiFocus(false, false)
+    SetNuiFocus(false, false)                                   -- release focus to game
     SendNUIMessage({ action = 'close' })
 end
 
+-- ↓ centralize open logic
 local function openUI()
-    if isOpen then return end
+    if isOpen then return end                                   -- already open
 
-    -- ask server for the garage
+    -- ask the server for the player's vehicles
     local vehicles = lib.callback.await('my_garage:getVehicles', false)
     if not vehicles or #vehicles == 0 then
         lib.notify({
-            id = 'garage_empty',        -- [optional] dedupe if player spams the command
-            title = 'Garage',           -- [required*] need title OR description
+            id = 'garage_empty',
+            title = 'Garage',
             description = 'No vehicles stored',
-            type = 'inform',            -- [optional] neutral blue style
-            icon = 'warehouse',         -- [optional]
-            iconColor = '#8ecae6',      -- [optional] soft blue
+            type = 'inform',
+            icon = 'warehouse',
+            iconColor = '#8ecae6',
         })
         return
     end
 
     isOpen = true
-    SetNuiFocus(true, true)
+    SetNuiFocus(true, true)                                     -- grab focus + cursor
     SendNUIMessage({ action = 'open', payload = { vehicles = vehicles } })
 end
 
+-- ↓ /garage opens the menu
 RegisterCommand('garage', function()
     openUI()
 end, false)
 
+-- ↓ NUI sent "close" — release focus, hide UI
 RegisterNUICallback('close', function(_, cb)
     closeUI()
-    cb('ok')
+    cb('ok')                                                    -- mandatory
 end)
 
+-- ↓ NUI sent "spawn" — spawn the chosen vehicle
 RegisterNUICallback('spawn', function(data, cb)
-    closeUI()
+    closeUI()                                                   -- close menu first
 
-    if type(data.model) ~= 'string' then cb('err'); return end
+    -- validate the model arg
+    if type(data.model) ~= 'string' then
+        cb('err')
+        return
+    end
 
-    local model = joaat(data.model)
+    -- ↓ load the model
+    local model = joaat(data.model)                             -- compute hash from string at runtime
     RequestModel(model)
+
+    -- ↓ wait for it to load (with a timeout to avoid infinite hang)
     local tries = 0
-    while not HasModelLoaded(model) and tries < 100 do
+    while not HasModelLoaded(model) and tries < 100 do          -- max 5 seconds (100 × 50ms)
         Wait(50)
         tries = tries + 1
     end
+
     if not HasModelLoaded(model) then
         lib.notify({
-            id = 'garage_model_fail',       -- [optional]
-            title = 'Garage',               -- [required*]
+            id = 'garage_model_fail',
+            title = 'Garage',
             description = 'Failed to load model',
-            type = 'error',                 -- [optional]
-            icon = 'triangle-exclamation',  -- [optional]
-            iconColor = '#e63946',          -- [optional]
-            iconAnimation = 'shake',        -- [optional] errors get visual weight
+            type = 'error',
+            icon = 'triangle-exclamation',
+            iconColor = '#e63946',
+            iconAnimation = 'shake',
         })
-        cb('err'); return
+        cb('err')
+        return
     end
 
+    -- ↓ get the player's position to spawn next to them
     local ped = PlayerPedId()
     local pos = GetEntityCoords(ped)
     local heading = GetEntityHeading(ped)
 
+    -- ↓ delete the previously-spawned vehicle if any (avoid stacking cars)
     if spawnedVeh and DoesEntityExist(spawnedVeh) then
         DeleteEntity(spawnedVeh)
     end
 
+    -- ↓ spawn the vehicle 3 meters east of the player
     spawnedVeh = CreateVehicle(model, pos.x + 3.0, pos.y, pos.z, heading, true, false)
-    SetModelAsNoLongerNeeded(model)
+    SetModelAsNoLongerNeeded(model)                             -- release the streaming slot
 
-    TaskWarpPedIntoVehicle(ped, spawnedVeh, -1)
+    TaskWarpPedIntoVehicle(ped, spawnedVeh, -1)                 -- put the player in the driver seat
+
     lib.notify({
-        id = 'garage_spawn',            -- [optional]
-        title = 'Garage',               -- [required*]
+        id = 'garage_spawn',
+        title = 'Garage',
         description = 'Spawned ' .. data.model,
-        type = 'success',               -- [optional]
-        icon = 'car',                   -- [optional]
-        iconColor = '#2a9d8f',          -- [optional]
-        duration = 3500,                -- [optional] slightly longer so they read the model name
+        type = 'success',
+        icon = 'car',
+        iconColor = '#2a9d8f',
+        duration = 3500,
     })
 
     cb('ok')
 end)
 
--- CRITICAL cleanup
+-- ↓ CRITICAL: cleanup on resource stop (release focus + delete spawned vehicle)
 AddEventHandler('onResourceStop', function(r)
     if r ~= GetCurrentResourceName() then return end
     SetNuiFocus(false, false)
@@ -308,70 +348,102 @@ AddEventHandler('onResourceStop', function(r)
 end)
 ```
 
-## server/main.lua
+---
+
+## `server/main.lua`
 
 ```lua
--- hardcoded garage for demo. In real life, query DB per player.
+-- ↓ hardcoded garage for the demo. In a real server, this would query the player's vehicles from MySQL.
 local GARAGE = {
-    { model = 'adder',    label = 'Truffade Adder', plate = 'ADDER1' },
-    { model = 'zentorno', label = 'Pegassi Zentorno', plate = 'ZENT42' },
-    { model = 'sultan',   label = 'Karin Sultan',   plate = 'FAST99' },
+    { model = 'adder',    label = 'Truffade Adder',    plate = 'ADDER1' },
+    { model = 'zentorno', label = 'Pegassi Zentorno',  plate = 'ZENT42' },
+    { model = 'sultan',   label = 'Karin Sultan',      plate = 'FAST99' },
 }
 
+-- ↓ callback returns the list to the client
 lib.callback.register('my_garage:getVehicles', function(src)
-    -- TODO: in real impl, query MySQL players_vehicles WHERE citizenid = ?
+    -- TODO: in a real implementation, query the DB:
+    -- local rows = MySQL.query.await('SELECT plate, vehicle FROM player_vehicles WHERE citizenid = ?', { cid })
+    -- return rows
     return GARAGE
 end)
 ```
 
-Real garage would query:
+In production, you'd query the player's actual vehicles:
+
 ```lua
+local cid = exports.qbx_core:GetPlayer(src).PlayerData.citizenid
 local rows = MySQL.query.await(
     'SELECT plate, vehicle FROM player_vehicles WHERE citizenid = ?',
-    {cid}
+    { cid }
 )
+return rows
 ```
+
+---
 
 ## Test
 
-1. Restart server or `ensure my_garage`
+1. Restart the server (or `ensure my_garage`)
 2. In game: `/garage`
 3. Menu pops up with 3 vehicles
-4. Click one. UI closes, vehicle spawns, you're in it.
-5. ESC closes without spawning.
+4. Click one → UI closes, vehicle spawns next to you, you're in the driver seat
+5. Press ESC mid-menu → UI closes without spawning
 
-## Verify Gold-Standard Checklist
+---
+
+## Verify The "Gold Standard" Checklist
+
+The 7 things every NUI resource should do (from [`07-nui/01-nui-basics.md`](../07-nui/01-nui-basics.md)):
 
 - [x] `background: transparent` on body
-- [x] `visibility: hidden` class, not `display: none`
-- [x] `fetchNui` with try/catch
-- [x] `SetNuiFocus` on open, always on close
+- [x] `visibility: hidden` class, NOT `display: none` and NOT conditional render
+- [x] `fetchNui` wrapped in try/catch
+- [x] `SetNuiFocus(true, true)` on open, `(false, false)` on close
 - [x] ESC key closes
-- [x] `onResourceStop` cleanup (focus + entity)
-- [x] Server validates callback arg (type check)
+- [x] `onResourceStop` cleanup (focus + spawned entities)
+- [x] Server validates callback args (type check)
+
+Passes.
+
+---
 
 ## Upgrade Paths
 
-1. **React + Vite**: follow `07-nui/02-react-nui.md`. Convert `app.js` to `App.tsx`.
-2. **Real DB garage**: query player's vehicles table, return only theirs.
-3. **Store/retrieve vehicle**: track state with metadata/DB, only allow spawn if "stored".
-4. **Categories**: tabs for Cars / Bikes / Planes.
-5. **Search**: filter input filtering the list.
+Each is its own little project:
+
+1. **React + Vite** — convert `app.js` to `App.tsx`. Follow [`07-nui/02-react-nui.md`](../07-nui/02-react-nui.md).
+2. **Real DB-backed garage** — query `player_vehicles` for the logged-in player.
+3. **Store/retrieve** — track if a vehicle is "stored" or "out". Only allow spawn if stored. On `/store`, mark it stored and delete the entity.
+4. **Categories** — tabs for Cars / Bikes / Planes / Helis based on `GetVehicleClass`.
+5. **Search** — input field that filters the list by label.
+
+---
 
 ## TL;DR
 
 - 4 files: manifest + client + server + HTML/CSS/JS
-- Client command -> callback fetches list -> SendNUIMessage shows it
-- UI click -> fetchNui -> RegisterNUICallback -> spawn vehicle
-- `visibility: hidden`, ESC to close, onResourceStop cleanup, try/catch fetchNui
-- Server side = data source of truth
+- Client command → callback fetches list → `SendNUIMessage` shows it
+- UI click → `fetchNui` → `RegisterNUICallback` → spawn vehicle
+- All 7 gold-standard practices: `visibility: hidden`, ESC, `onResourceStop` cleanup, try/catch, etc.
+- Server is the source of truth for what vehicles exist
+
+You've now built three resources that touch every major FiveM concept. Go build something real.
+
+---
 
 ## Sources
 
-- FiveM NUI dev guide: https://docs.fivem.net/docs/scripting-manual/nui-development/
-- SendNUIMessage: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/SendNUIMessage/
-- RegisterNUICallback: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNUICallback/
-- ox_lib callbacks (source): https://github.com/communityox/ox_lib/tree/master/imports/callback
-- ox_lib notify: https://coxdocs.dev/ox_lib/Modules/Interface/Client/notify
+- [FiveM NUI Development](https://docs.fivem.net/docs/scripting-manual/nui-development/)
+- [SendNUIMessage](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/SendNUIMessage/)
+- [RegisterNUICallback](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNUICallback/)
+- [ox_lib callbacks (source)](https://github.com/communityox/ox_lib/tree/master/imports/callback)
+- [ox_lib notify](https://coxdocs.dev/ox_lib/Modules/Interface/Client/notify)
+- [CreateVehicle native](https://docs.fivem.net/natives/?_0xAF35D0D2583051B0)
+- [Vehicle Models reference](https://docs.fivem.net/docs/game-references/vehicle-models/)
 
-Back to: `INDEX.md`
+---
+
+**You're done with the course.** Back to [`INDEX.md`](../INDEX.md).
+
+Build something. Break something. Read more code. The fastest way past the beginner phase is to ship a real resource — even a tiny one — and iterate it on a real server.

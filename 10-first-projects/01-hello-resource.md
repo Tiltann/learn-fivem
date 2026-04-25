@@ -1,10 +1,16 @@
 # 01. Project: Hello Resource
 
-First real resource. Goal: make `/hello` command that notifies the player server-side via ox_lib. Touches manifest, client, server, events, and notifications.
+## Goal
 
-Time: 30 minutes. Build it from zero.
+Build your first real resource. **`/hello` command** that sends a notification using the player's character name. Touches: fxmanifest, client, server, events, ox_lib notifications, and Qbox player data.
+
+Time: ~30 minutes. Build it from zero.
+
+---
 
 ## Setup
+
+Create the folder:
 
 ```
 resources/[test]/hello_world/
@@ -13,178 +19,205 @@ resources/[test]/hello_world/
 └── server.lua
 ```
 
-Create the folder. Don't use existing resources to avoid conflicts.
+Use `[test]/` as a category so it doesn't conflict with anything else. Note `[test]` is just a folder grouping — not a resource itself.
 
-Add to `server.cfg`:
-```
+In `server.cfg`:
+
+```cfg
 ensure hello_world
 ```
-or 
-```
+
+Or, if you have many test resources:
+
+```cfg
 ensure [test]
 ```
 
-## fxmanifest.lua
+(That ensures every resource inside `[test]/`.)
+
+---
+
+## `fxmanifest.lua`
 
 ```lua
-fx_version 'cerulean' -- Best version
-game 'gta5' -- The game itself
-lua54 'yes' -- Best runtime version
+fx_version 'cerulean'                                           -- modern manifest API
+game 'gta5'                                                     -- FiveM target
+lua54 'yes'                                                     -- Lua 5.4 features
 
-author 'You'
+author 'You'                                                    -- metadata, optional
 description 'Hello world resource'
 version '1.0.0'
 
+-- ↓ pull in ox_lib's "lib" global on both sides
 shared_script '@ox_lib/init.lua'
 
 client_script 'client.lua'
 server_script 'server.lua'
 ```
 
-## client.lua
+---
+
+## `client.lua`
 
 ```lua
--- Register chat command, fires server event
+-- ↓ register the /hello chat command (false at end = not restricted, anyone can use)
 RegisterCommand('hello', function()
-    TriggerServerEvent('hello:say') -- send to server, no data
-end, false) -- false = not restricted, any player can use
+    TriggerServerEvent('hello:say')                             -- ask the server to do the work
+end, false)
 
--- Listen for server's reply
+-- ↓ when the server replies, show a notification
 RegisterNetEvent('hello:notify', function(msg)
     lib.notify({
-        id = 'hello_greeting',      -- [optional] dedupe key, prevents spam stacking
-        title = 'Hello World',      -- [required*] header text (*need this OR description)
-        description = msg,          -- [required*] body, supports markdown (*need this OR title)
-        type = 'success',           -- [optional] default 'inform' (inform/error/success/warning)
-        position = 'top-right',     -- [optional] default 'top-right'
-        duration = 4000,            -- [optional] default 3000ms
-        icon = 'hand-wave',         -- [optional] FontAwesome 6 name, no fa- prefix
-        iconColor = '#ffb703',      -- [optional] default matches `type` color
+        id = 'hello_greeting',                                  -- [optional] dedupe key, prevents spam stacking
+        title = 'Hello World',                                  -- [required*] *need title OR description
+        description = msg,                                      -- [required*]
+        type = 'success',                                       -- [optional] inform/success/error/warning
+        position = 'top-right',                                 -- [optional] default 'top-right'
+        duration = 4000,                                        -- [optional] default 3000ms
+        icon = 'hand-wave',                                     -- [optional] FontAwesome 6 icon name
+        iconColor = '#ffb703',                                  -- [optional] color override
     })
 end)
 ```
 
-### Notify Options
+### Notify Field Reference
 
-`lib.notify` takes an options table. Full list with necessity flags (from ox_lib docs):
+Quick recap of `lib.notify` options:
 
-**Required (pick at least one):**
-- `title` - header text
-- `description` - body, supports markdown
+**Required (need at least one):**
+- `title` — header text
+- `description` — body text (supports markdown)
 
 **Optional:**
-- `id` - unique key, prevents duplicate spam on screen. Skip = every call shows a new notif
-- `duration` - ms, default `3000`
-- `showDuration` - show countdown bar, default `true`
-- `position` - `top` / `top-right` / `top-left` / `bottom` / `bottom-right` / `bottom-left` / `center-right` / `center-left`, default `top-right`
-- `type` - `inform` / `error` / `success` / `warning`, default `inform`
-- `icon` - FontAwesome 6 icon name (no `fa-` prefix). Skip = default icon for the `type`
-- `iconColor` - any valid CSS color. Skip = color matches `type`
-- `iconAnimation` - `spin` / `spinPulse` / `spinReverse` / `pulse` / `beat` / `fade` / `beatFade` / `bounce` / `shake`
-- `alignIcon` - `top` or `center`, default `center`
-- `style` - React CSS object for custom styling
-- `sound` - `{ bank?, set, name }` to play a game audio cue
+- `id` — dedupe key. Same id within active duration replaces the existing notif instead of stacking. **Always set this** in production.
+- `duration` — milliseconds. default `3000`.
+- `showDuration` — show countdown bar. default `true`.
+- `position` — `top` / `top-right` / `top-left` / `bottom` / `bottom-right` / `bottom-left` / `center-right` / `center-left`. default `top-right`.
+- `type` — `inform` / `error` / `success` / `warning`. default `inform`.
+- `icon` — FontAwesome 6 icon name (no `fa-` prefix needed).
+- `iconColor` — any CSS color. default matches `type`.
+- `iconAnimation` — `spin` / `spinPulse` / `spinReverse` / `pulse` / `beat` / `fade` / `beatFade` / `bounce` / `shake`.
+- `alignIcon` — `top` or `center`. default `center`.
+- `style` — React CSS object for full custom styling.
+- `sound` — `{ bank?, set, name }` plays an in-game audio cue.
 
-### Bare Minimum
-
-Smallest valid call:
+### Bare-minimum call
 
 ```lua
-lib.notify({ description = 'Saved' }) -- defaults: type=inform, position=top-right, duration=3000
+lib.notify({ description = 'Saved' })
+-- defaults: type=inform, position=top-right, duration=3000
 ```
 
-### Common Production Shape
-
-What you'll actually use 90% of the time:
+### Production-shape call (90% of the time)
 
 ```lua
 lib.notify({
-    id = 'unique_key',      -- always add, prevents spam
-    title = 'Shop',         -- context header
+    id = 'unique_key',                                          -- always — prevents spam
+    title = 'Shop',                                             -- gives context
     description = 'Bought bread',
-    type = 'success',       -- pick one
-    icon = 'check',         -- visual clarity
+    type = 'success',                                           -- pick one
+    icon = 'check',                                             -- visual clarity
 })
 ```
 
-`id` looks optional but in practice it's the difference between one notif and twenty when an event fires in a loop.
+---
 
-## server.lua
+## `server.lua`
 
 ```lua
+-- ↓ listen for the /hello command's server event
 RegisterNetEvent('hello:say', function()
-    local src = source -- ALWAYS cache source, it drifts in async code
-    local player = exports.qbx_core:GetPlayer(src) -- get player object
-    local name = player and player.PlayerData.charinfo.firstname or 'Stranger' -- fallback if no framework data
+    local src = source                                          -- ALWAYS first line — cache the player who fired
+    local player = exports.qbx_core:GetPlayer(src)              -- get Qbox player object
 
-    TriggerClientEvent('hello:notify', src, 'Hello ' .. name .. '!') -- send back to that player only
-    print(('[hello] Player %d (%s) said hi'):format(src, name)) -- server log
+    -- ↓ "or 'Stranger'" gives a fallback if the framework isn't loaded for this player yet
+    local name = player and player.PlayerData.charinfo.firstname or 'Stranger'
+
+    TriggerClientEvent('hello:notify', src, 'Hello ' .. name .. '!')  -- send back to that player only
+
+    -- ↓ log to the server console for debugging
+    print(('[hello] Player %d (%s) said hi'):format(src, name))
 end)
 ```
 
-## Test
+---
 
-1. Start server (or `ensure hello_world` if already running)
-2. In game: `/hello`
-3. See ox_lib notification top-right with your character's first name
+## Test It
+
+1. Restart the server (or `ensure hello_world` in console)
+2. In game: type `/hello` in chat
+3. See an ox_lib notification top-right with your character's first name
 4. Server console prints the log line
 
-## What You Just Did
+Done. You wrote a working FiveM resource.
+
+---
+
+## What You Just Did (In Plain English)
 
 - Created a valid FiveM resource manifest
-- Wired a shared ox_lib dependency
-- Registered a client command
-- Fired server via `TriggerServerEvent`
-- Fetched the player object via Qbox
-- Fired client back via `TriggerClientEvent`
-- Showed ox_lib notification
-- Logged server-side
+- Pulled in ox_lib for notifications
+- Registered a client chat command
+- Sent a server event from the client
+- Looked up the player's character name on the server
+- Sent a client event back with the message
+- Showed a styled notification
 
-That's 80% of what every resource does.
+That's roughly **80% of what every interactive resource does**. Variations are just bigger menus, more events, more data.
 
-## Add: Cooldown (Security Baby Step)
+---
 
-Players can spam `/hello` and flood console. Add server rate limit:
+## Add A Cooldown (Security Baby Step)
+
+Players can spam `/hello` and flood your console. Add a server-side rate limit:
 
 ```lua
-local cooldowns = {}
+local cooldowns = {}                                            -- src → last fire timestamp
 
 RegisterNetEvent('hello:say', function()
     local src = source
-    local now = GetGameTimer()
+    local now = GetGameTimer()                                  -- ms since server start
 
+    -- ↓ if they fired within the last 2 seconds, reject
     if cooldowns[src] and (now - cooldowns[src]) < 2000 then
         TriggerClientEvent('hello:notify', src, 'Slow down')
         return
     end
-    cooldowns[src] = now
+    cooldowns[src] = now                                        -- update timestamp
 
     local player = exports.qbx_core:GetPlayer(src)
     local name = player and player.PlayerData.charinfo.firstname or 'Stranger'
     TriggerClientEvent('hello:notify', src, 'Hello ' .. name .. '!')
 end)
 
+-- ↓ memory leak protection: drop the entry when they leave
 AddEventHandler('playerDropped', function()
     cooldowns[source] = nil
 end)
 ```
 
-2 second cooldown per player. Clear on disconnect to avoid memory leak.
+Same pattern works for shops, drug deals, anything that shouldn't be spammed.
 
-## Add: Arguments
+---
+
+## Add Arguments (Validation Practice)
+
+Let `/hello world` send "hi to world", `/hello sam` send "hi to sam":
 
 ```lua
 -- client.lua
-RegisterCommand('hello', function(source, args)
-    local target = args[1] or 'world'
+RegisterCommand('hello', function(source, args)                 -- args is an array of strings after the command
+    local target = args[1] or 'world'                           -- first arg, or 'world' as default
     TriggerServerEvent('hello:say', target)
 end, false)
 
 -- server.lua
 RegisterNetEvent('hello:say', function(target)
     local src = source
-    if type(target) ~= 'string' then return end
-    if #target > 32 then return end
+
+    -- ↓ ALWAYS validate every net event arg
+    if type(target) ~= 'string' then return end                 -- type check
+    if #target > 32 then return end                             -- length cap (no 10MB strings)
 
     local player = exports.qbx_core:GetPlayer(src)
     local name = player and player.PlayerData.charinfo.firstname or 'Stranger'
@@ -192,31 +225,38 @@ RegisterNetEvent('hello:say', function(target)
 end)
 ```
 
-Validate every arg. `type` check + length cap. Every net event.
+`type` + length cap on every string arg from the client. Habit-forming.
 
-## Add: Admin-Only Command
+---
+
+## Add Admin-Only Variant
 
 ```lua
 -- server.lua
+-- ↓ "true" at the end = restricted, requires ACE permission to run
 RegisterCommand('helloall', function(src)
     if src == 0 then
-        -- console, allow
+        -- src == 0 means the server console itself (not a player). Allow.
     elseif not IsPlayerAceAllowed(src, 'command.helloall') then
-        return
+        return                                                  -- not allowed, bail
     end
 
+    -- broadcast to everyone
     for _, pid in ipairs(GetPlayers()) do
         TriggerClientEvent('hello:notify', tonumber(pid), 'Hello from admin!')
     end
-end, true)
+end, true)                                                      -- true = restricted to ACE
 ```
 
-```
-# in permissions.cfg
+In `permissions.cfg`:
+
+```cfg
 add_ace group.admin command.helloall allow
 ```
 
-Any admin can `/helloall`. Others get nothing.
+Now any admin (anyone with `group.admin`) can run `/helloall`. Other players get nothing — the command silently rejects their attempt.
+
+---
 
 ## Iterate
 
@@ -224,46 +264,59 @@ Any admin can `/helloall`. Others get nothing.
 restart hello_world
 ```
 
-Every code change. No hot reload for Lua on FiveM.
+Run after every Lua change. **No hot reload for Lua in FiveM.**
 
-## Check resmon
+---
+
+## Check `resmon`
 
 ```
 resmon
 ```
 
-`hello_world` should show ~0.00 ms. It's event-driven, no loops.
+`hello_world` should show **~0.00 ms**. There are no loops — everything is event-driven.
 
-## Commit
+---
 
-```
-git add resources/[test]/hello_world
+## Commit Your Work
+
+```bash
+cd resources/[test]/hello_world
+git add .
 git commit -m "Add hello_world test resource"
 ```
 
-Adapt path to wherever test resources live on your server.
+If your server uses one big monorepo, adapt the path. Either way: small, focused commits.
+
+---
 
 ## What's Next
 
-- Shop resource (`02-shop.md`): money, items, job check
-- NUI menu (`03-nui-menu.md`): HTML UI opened via command
+- [`02-shop.md`](02-shop.md) — full shop with money, inventory, security
+- [`03-nui-menu.md`](03-nui-menu.md) — HTML UI menu opened from a command
 
-Those tie everything together.
+---
 
 ## TL;DR
 
-- Manifest declares client/server/ui
-- Client fires server, server fires client, both via events
-- Every net event: validate args, rate limit
-- Use ox_lib notify, Qbox for player data
-- `restart hello_world` to reload
+- fxmanifest declares resource files
+- Client → `TriggerServerEvent`, server → `TriggerClientEvent`
+- Always validate net event args
+- `lib.notify` for notifications, `Qbox` for player data
+- `restart resource_name` after every Lua change
+- Add cooldowns and ACE permissions where needed
+
+---
 
 ## Sources
 
-- ox_lib notify: https://coxdocs.dev/ox_lib/Modules/Interface/Client/notify
-- RegisterCommand (Lua runtime): https://docs.fivem.net/docs/scripting-reference/runtimes/lua/
-- RegisterNetEvent: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNetEvent/
-- Qbox player data: https://docs.qbox.re/
-- FontAwesome 6 icons: https://fontawesome.com/icons
+- [ox_lib notify reference](https://coxdocs.dev/ox_lib/Modules/Interface/Client/notify)
+- [RegisterCommand](https://docs.fivem.net/natives/?_0x5FA79B0F)
+- [RegisterNetEvent](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNetEvent/)
+- [Qbox player data](https://docs.qbox.re/)
+- [ACE permissions](https://docs.fivem.net/docs/server-manual/setting-up-a-server/#permissions)
+- [FontAwesome 6 icons](https://fontawesome.com/icons)
 
-Next: `02-shop.md`
+---
+
+Next: [`02-shop.md`](02-shop.md)

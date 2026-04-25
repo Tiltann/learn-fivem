@@ -1,195 +1,294 @@
 # 03. Client vs Server
 
-Most important concept in FiveM. Get this wrong = exploits, dupes, broken server.
+## Plain English
+
+This is **the most important concept in FiveM**. Get it wrong, your server gets exploited within a week. Get it right, you'll write secure resources by default.
+
+There are two places your code runs:
+
+- **Client** = on the player's PC. Hostile. They can read it, edit it, inject stuff into it.
+- **Server** = on your server machine. Trusted. Players can't see or modify it.
+
+**Client tells the server what it WANTS to happen. Server decides if it's allowed and makes it happen.**
+
+That's the whole game.
+
+---
 
 ## Two Places, Two Rules
 
-**Client** = player's PC. Runs game. Renders graphics. Reads input. Spawns vehicles visually. Hostile = you do not trust it.
+| | Client | Server |
+|---|--------|--------|
+| Where it runs | Player's PC | Your server machine |
+| Trust level | **Hostile** — never trust it | **Trusted** — source of truth |
+| Has database access? | No | Yes |
+| Has player money? | No (a copy for display only) | Yes (the real number) |
+| Can spawn cars? | Yes (visually) | Yes (and tells clients to render them) |
+| Reads keyboard? | Yes | No |
+| Draws UI? | Yes | No |
+| Validates events? | No | **Yes — always** |
 
-**Server** = your machine (or VPS). Runs 24/7. Owns state. DB lives here. Money lives here. Inventory lives here. Trusted = authoritative.
+Real example: a player wants to buy bread.
 
-Client tells server "I want to buy bread". Server decides if allowed, takes money, gives item. Server sends back "here's your updated inventory". Client displays it.
+1. Client sends event "I want to buy bread"
+2. Server checks: are they near the shop? Do they have $10? Do they have inventory space?
+3. If yes, server takes $10, gives 1 bread, saves to DB, sends "you bought bread" back to client
+4. Client displays the notification
 
-Never other way. Client never decides money. Client never decides DB writes.
+**The client never decides money or items. Ever.**
 
-## File Split
+---
 
-In a resource:
+## File Split In A Resource
+
+A typical resource organizes its code by side:
+
 ```
 my_resource/
-  fxmanifest.lua
-  client/
-    main.lua      ← runs on player PC
-  server/
-    main.lua      ← runs on server
-  shared/
-    config.lua    ← runs on both
+├── fxmanifest.lua      ← required, declares the resource
+├── client/
+│   └── main.lua        ← runs on the player PC
+├── server/
+│   └── main.lua        ← runs on the server
+└── shared/
+    └── config.lua      ← runs on BOTH sides
 ```
 
-In `fxmanifest.lua`:
+In `fxmanifest.lua`, you tell FiveM which file goes where:
+
 ```lua
+-- this file runs on the player's PC
 client_script 'client/main.lua'
+
+-- this file runs on the server
 server_script 'server/main.lua'
+
+-- this file runs on BOTH sides — useful for config tables
 shared_script 'shared/config.lua'
 ```
 
-## What Client Can Do
+---
 
-- Draw UI (NUI, markers, text)
-- Read keyboard/mouse
-- Spawn vehicles visually (but server decides if allowed)
-- Play animations
-- Call most GTA natives
-- Send events to server
+## What Client Code Can Do
 
-## What Server Can Do
+- Draw UI (NUI, on-screen text, blips, markers)
+- Read keyboard and mouse input
+- Spawn vehicles, peds, objects (visually)
+- Play animations, sounds, particle effects
+- Call most GTA V natives
+- **Send events to the server** asking it to do something
+- Receive events from the server telling it what to display
 
-- Read/write DB
-- Manage player money and inventory
-- Kick/ban players
-- Call server-side natives (less than client, but critical ones)
-- Validate everything from client
-- Send events to client(s)
+What client code **cannot** do:
+- Read the database directly (no DB access on client)
+- Modify other players' state authoritatively
+- Be trusted with anything that matters
 
-## What Shared Can Do
+---
 
-Usually config tables + helper functions safe for both. No network calls. No DB. No NUI.
+## What Server Code Can Do
+
+- Read and write the database
+- Manage every player's money, inventory, job
+- Kick or ban players (`DropPlayer`)
+- Validate every event from clients
+- Send events to one client, several clients, or all clients
+- Call server-side natives (a smaller set than client, but the critical ones)
+
+What server code **cannot** do:
+- Read the player's keyboard
+- Draw on the player's screen directly (it sends events to clients to do that)
+- Spawn entities locally — it asks a client to spawn them
+
+---
+
+## What Shared Code Can Do
+
+Just config tables and helper functions safe for both sides. **No network calls, no DB access, no NUI.**
 
 ```lua
 -- shared/config.lua
-Config = {}
+-- this loads on BOTH client and server, so both sides can read Config.Shop
+Config = {}                              -- create a global table
 Config.Shop = {
-    coords = vector3(100, 200, 30),
-    items = { 'bread', 'water' },
+    coords = vector3(100, 200, 30),      -- shop location
+    items = { 'bread', 'water' },        -- list of allowed items
 }
 ```
 
-Loaded by both, so both sides read `Config.Shop`.
+Then in `client/main.lua` and `server/main.lua`, you can both do `print(Config.Shop.coords)`.
 
-## Example: Buy Item
+**Beware:** putting prices in shared config means clients can read them. That's usually fine for display — but use server-side config for **authoritative** prices, formulas, and discount logic.
 
-**Wrong** (client authority):
+---
+
+## Example: Buying An Item (Wrong vs Right)
+
+### Wrong — client authority (EXPLOITABLE)
+
 ```lua
--- client
-RegisterCommand('buy', function()
-    AddMoney(-10)           -- client sets money. EXPLOITABLE.
-    AddItem('bread', 1)
+-- client/main.lua
+RegisterCommand('buy', function()       -- registers the /buy command
+    AddMoney(-10)                       -- client subtracts $10 — but the player can edit this line out!
+    AddItem('bread', 1)                 -- client adds 1 bread — exploit: spam this command
 end)
 ```
 
-Player edits their Lua. Spams with `-0`. Infinite bread.
+A player edits their client Lua. Comments out the `AddMoney(-10)` line. Now they get bread for free. Forever.
 
-**Right** (server authority):
+### Right — server authority (SAFE)
+
 ```lua
--- client
-RegisterCommand('buy', function()
-    TriggerServerEvent('shop:buy', 'bread')
-end)
-
--- server
-RegisterNetEvent('shop:buy', function(itemId)
-    local src = source
-    if not src or src == 0 then return end
-    if itemId ~= 'bread' then return end              -- whitelist
-
-    local player = exports.qbx_core:GetPlayer(src)
-    if not player then return end
-    if player.PlayerData.money.cash < 10 then return end
-
-    player.Functions.RemoveMoney('cash', 10, 'bread buy')
-    exports.ox_inventory:AddItem(src, 'bread', 1)
+-- client/main.lua
+RegisterCommand('buy', function()                       -- registers /buy
+    TriggerServerEvent('shop:buy', 'bread')             -- ASK the server to do the buy. that's all.
 end)
 ```
 
-Server checks money. Server deducts. Server adds item. Client just asks.
+```lua
+-- server/main.lua
+RegisterNetEvent('shop:buy', function(itemId)           -- listen for the buy event
+    local src = source                                  -- ALWAYS the first line: cache the player who triggered this
+    if not src or src == 0 then return end              -- safety: no valid player, bail
 
-## Event Triggers
+    if itemId ~= 'bread' then return end                -- whitelist: only "bread" is allowed via this event
+
+    local player = exports.qbx_core:GetPlayer(src)      -- get the Qbox player object for this src
+    if not player then return end                       -- player not loaded yet — bail
+    if player.PlayerData.money.cash < 10 then return end -- can they afford it? if not, bail
+
+    player.Functions.RemoveMoney('cash', 10, 'bread buy') -- atomically take $10 (logged with reason)
+    exports.ox_inventory:AddItem(src, 'bread', 1)       -- give them 1 bread via the inventory resource
+end)
+```
+
+The client just sends a request. The server checks **everything** and decides.
+
+---
+
+## Event Triggers At A Glance
 
 | From | To | Function |
-|------|------|----------|
+|------|----|----------|
 | Client | Server | `TriggerServerEvent('name', ...)` |
-| Server | Specific client | `TriggerClientEvent('name', targetId, ...)` |
-| Server | All clients | `TriggerClientEvent('name', -1, ...)` |
-| Client | Self (same side) | `TriggerEvent('name', ...)` |
-| Server | Self (same side) | `TriggerEvent('name', ...)` |
+| Server | One specific client | `TriggerClientEvent('name', targetId, ...)` |
+| Server | All connected clients | `TriggerClientEvent('name', -1, ...)` |
+| Client → itself | Same side only | `TriggerEvent('name', ...)` |
+| Server → itself | Same side only | `TriggerEvent('name', ...)` |
 
-`source` in server event handler = player who sent it. Save to `local src = source` first line.
+**`TriggerEvent` does NOT cross sides.** If you call it on the server, only server-side handlers get it. Confusing newbies for years — burn it in.
 
-## Natives Split
+Full deep-dive in [`02-events/`](../02-events/).
 
-Natives = GTA V API. Some are client-only, some server-only, some shared.
+---
 
-- `GetEntityCoords` → both (server version reads synced data)
-- `SetEntityCoords` → client only
-- `DropPlayer` → server only
-- `RegisterCommand` → both (server side restricts by ACE)
+## Natives Are Split Too
 
-Docs tell you per-native: https://docs.fivem.net/natives/
+GTA V's API is huge. Some natives only work on the client, some only on the server, some on both. The official native database tells you per-native:
+
+| Native | Side | What it does |
+|--------|------|--------------|
+| `GetEntityCoords` | Both | Read the position of an entity |
+| `SetEntityCoords` | Client only | Move an entity (the owning client does it) |
+| `DropPlayer` | Server only | Kick a player |
+| `RegisterCommand` | Both | Register a `/command` handler |
+
+If you call a server-only native from the client, it errors or no-ops. Always check the docs.
+
+→ [Native Reference](https://docs.fivem.net/natives/)
+
+---
 
 ## Don't Trust Client Input
 
-Anything from `TriggerServerEvent` = attacker-controlled. Validate:
+Anything that arrives on the server through `RegisterNetEvent` — args, IDs, amounts, item names — is attacker-controlled. **Validate everything.**
 
 ```lua
 RegisterNetEvent('shop:buy', function(itemId, qty)
-    local src = source
+    local src = source                                       -- cache the source FIRST
+    if not src or src == 0 then return end                   -- valid source check
 
-    -- type
-    if type(itemId) ~= 'string' then return end
-    if type(qty) ~= 'number' then return end
+    if type(itemId) ~= 'string' then return end              -- must be a string
+    if type(qty) ~= 'number' then return end                 -- must be a number
+    if qty < 1 or qty > 10 then return end                   -- must be in range
+    if not Config.ValidItems[itemId] then return end         -- must be on whitelist
 
-    -- range
-    if qty < 1 or qty > 10 then return end
-
-    -- whitelist
-    if not Config.ValidItems[itemId] then return end
-
-    -- ...now do work
+    -- only NOW do the actual work
 end)
 ```
 
-Covered deep in `02-events/03-event-security.md` and `08-security/`.
+Full security checklist: [`02-events/03-event-security.md`](../02-events/03-event-security.md) and [`08-security/01-security-checklist.md`](../08-security/01-security-checklist.md).
+
+---
 
 ## The `source` Variable
 
-Server net event has magic `source` = player's server ID (small number like 1-128). Save immediately:
+When a client triggers a net event, the server's handler has access to a magic global called `source`. It's the **server ID** of the player who fired the event (a small number like `1`, `42`, `127`).
+
+**Always cache it on the first line:**
 
 ```lua
 RegisterNetEvent('my:event', function(data)
-    local src = source      -- do this FIRST
-    -- ... rest of code
-    -- source may change if you do another event call, src won't
+    local src = source            -- ← cache it FIRST, before anything else
+    -- ... rest of code uses src, never raw "source"
 end)
 ```
 
-## Client Can See Server Files?
+Why? Because `source` can change if your handler does another event call or yields. `src` is a local — it never changes. Use `src`. Always.
 
-**No**. But client CAN see all `client_script` + `shared_script`. Download the cache folder = all client Lua. Nothing on client is secret.
+---
 
-Server Lua stays on server. DB credentials on server. Discord webhooks on server.
+## Can The Client See Server Files?
 
-**But**: if your server files leak (GitHub push, file share), server Lua leaks too. Don't hardcode webhooks or API keys there either. Use convars.
+**No** — server-only files (`server_script`, files NOT in the `files {}` list) stay on the server. Client never downloads them.
+
+**But** the client DOES download:
+- All `client_script` files
+- All `shared_script` files
+- All files listed in `files {}` (NUI assets)
+
+Players can find those in the FiveM cache folder on their PC. Treat anything client-side as **publicly readable**. Don't put webhooks, API keys, or admin secrets there.
+
+If your **server code** leaks (someone publishes the repo, a cloud bucket goes public), server secrets leak too. Use `convars` for anything sensitive — they live in `server.cfg` and aren't bundled with code:
+
+```lua
+-- in server.cfg:
+-- set my_webhook "https://discord.com/api/webhooks/..."
+
+-- in server-side Lua:
+local webhook = GetConvar('my_webhook', '')   -- second arg = default if convar missing
+```
+
+---
 
 ## Common Beginner Mistakes
 
-1. "Just do money on client, easier" → dupe bug within a week
-2. Trust `TriggerServerEvent` args → parameter injection
-3. Do DB query on client → impossible, DB only on server
-4. Forget `local src = source` → src changes mid-function, bugs
-5. Use `TriggerEvent` when need cross-side → silently does nothing
+1. **"Just do money on the client, it's easier"** — first dupe bug within a week. Money lives server-side.
+2. **Trusting `TriggerServerEvent` args without validation** — parameter injection, free items, instant level 99.
+3. **Trying to query MySQL from the client** — impossible, the DB only exists server-side.
+4. **Forgetting `local src = source`** — `source` mutates mid-function, weird bugs that are hours to track.
+5. **Using `TriggerEvent` when you needed `TriggerServerEvent` or `TriggerClientEvent`** — silently does nothing, you wonder why.
+
+---
 
 ## TL;DR
 
-- Client = hostile, display layer only
-- Server = trusted, owns state
-- Money/inventory/DB = server only
-- Every net event = validate args server side
-- `local src = source` first line always
+- **Client = hostile, display layer only.**
+- **Server = trusted, owns all critical state.**
+- Money, inventory, jobs, DB → server-side ALWAYS.
+- Every net event needs server-side validation.
+- `local src = source` first line of every server net event.
+- Don't trust args — type-check, range-check, whitelist-check.
+
+---
 
 ## Sources
 
-- Scripting manual intro (client/server split): https://docs.fivem.net/docs/scripting-manual/introduction/
-- Scripting runtimes: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/
-- OneSync: https://docs.fivem.net/docs/scripting-reference/onesync/
+- [Scripting Manual Introduction](https://docs.fivem.net/docs/scripting-manual/introduction/) — official client/server explainer
+- [Lua Runtime Reference](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/) — what each side can call
+- [OneSync](https://docs.fivem.net/docs/scripting-reference/onesync/) — networked entity model
+- [GetConvar](https://docs.fivem.net/natives/?_0x6B0DE401) — reading server config
 
-Next: `04-resources-and-fxmanifest.md`
+---
+
+Next: [`04-resources-and-fxmanifest.md`](04-resources-and-fxmanifest.md)

@@ -1,22 +1,34 @@
 # 01. NUI Basics
 
-**NUI** = New UI. In-game browser overlay. HTML/CSS/JS (or React) rendered on top of GTA V via CEF (Chromium Embedded Framework). Used for menus, HUDs, phones, shops.
+## Plain English
+
+**NUI** = "New UI". It's the HTML/JavaScript layer that gets rendered on top of GTA V via an embedded browser called CEF (Chromium Embedded Framework). Phones, menus, HUDs, shops, crafting screens — all NUI.
+
+Think of NUI as **a small browser tab pinned over the game window**. Your client-side Lua talks to it by sending messages. The browser sends messages back via `fetch` (HTTP-style requests).
+
+---
 
 ## Architecture
 
 ```
 GTA V Screen
-  └── Lua Client (your script)
-         └── SendNUIMessage(data)       -> passes data to browser
-         └── SetNuiFocus(true, true)    -> gives mouse to UI
+  └── Client Lua (your script)
+         ├── SendNUIMessage(data)       ──► sends data to the browser
+         └── SetNuiFocus(true, true)    ──► gives the cursor to the UI
   └── NUI Frame (HTML/JS in CEF)
-         └── fetchNui('callback', data) -> calls back to Lua
-         └── window.addEventListener('message', fn) -> receives from Lua
+         ├── window.addEventListener('message', fn)   ──► receives from Lua
+         └── fetch('https://res-name/cb', ...)        ──► calls back to Lua
 ```
 
-Client Lua pushes messages to UI. UI sends callbacks to Lua. Lua can trigger server if needed.
+Two-way:
+- **Lua → JS:** `SendNUIMessage(table)` on Lua side; `window.addEventListener('message', ...)` on JS side
+- **JS → Lua:** `fetch('https://my_resource/callbackName')` on JS side; `RegisterNUICallback('callbackName', ...)` on Lua side
 
-## Minimal Resource
+The client can also forward to the server via `TriggerServerEvent` — the server NEVER talks to NUI directly.
+
+---
+
+## Minimum Resource
 
 ```
 my_ui/
@@ -28,7 +40,7 @@ my_ui/
     └── style.css
 ```
 
-### fxmanifest.lua
+### `fxmanifest.lua`
 
 ```lua
 fx_version 'cerulean'
@@ -37,18 +49,18 @@ lua54 'yes'
 
 client_script 'client.lua'
 
-ui_page 'html/index.html'
+ui_page 'html/index.html'                                       -- entry point HTML
 
-files {
+files {                                                          -- everything the browser needs to fetch
     'html/index.html',
     'html/script.js',
     'html/style.css',
 }
 ```
 
-`ui_page` = main HTML file. `files` = assets the browser needs.
+`ui_page` declares the main HTML file. `files{}` lists everything the browser is allowed to load. **Forget a file in `files{}` → 404 in the browser.**
 
-### html/index.html
+### `html/index.html`
 
 ```html
 <!DOCTYPE html>
@@ -66,7 +78,7 @@ files {
 </html>
 ```
 
-### html/style.css
+### `html/style.css`
 
 ```css
 html, body {
@@ -74,7 +86,7 @@ html, body {
     padding: 0;
     width: 100vw;
     height: 100vh;
-    background: transparent;    /* critical */
+    background: transparent;    /* CRITICAL — without this, you get a black screen over the game */
 }
 
 #app {
@@ -89,19 +101,21 @@ html, body {
 }
 
 .hidden {
-    visibility: hidden;         /* NOT display:none */
+    visibility: hidden;         /* NOT display:none — see "Golden Rules" below */
 }
 ```
 
-**`background: transparent` on body**. Otherwise black screen forever.
+**`background: transparent` on body is mandatory.** Skip it → black screen forever.
 
-**`visibility: hidden`** when closed, NOT `display:none`. Not conditional removal. Why: see below.
+**Use `visibility: hidden`** when the UI should be hidden, not `display: none` and not conditional rendering. Reason explained below.
 
-### html/script.js
+### `html/script.js`
 
 ```javascript
+// grab the app element on load
 const app = document.getElementById('app');
 
+// listen for messages from Lua
 window.addEventListener('message', (event) => {
     const data = event.data;
     if (data.action === 'open') {
@@ -111,6 +125,7 @@ window.addEventListener('message', (event) => {
     }
 });
 
+// when the close button is clicked, send a callback to Lua
 document.getElementById('close').addEventListener('click', () => {
     fetch(`https://${GetParentResourceName()}/close`, {
         method: 'POST',
@@ -120,51 +135,64 @@ document.getElementById('close').addEventListener('click', () => {
 });
 ```
 
-`GetParentResourceName()` = global FiveM provides = your resource name. Callbacks go to `https://<resource>/<callbackName>`.
+`GetParentResourceName()` is a global FiveM provides to the browser — returns your resource's name (e.g., `'my_ui'`). Use it in fetch URLs so the right resource handles the callback.
 
-### client.lua
+### `client.lua`
 
 ```lua
-local isOpen = false
+local isOpen = false                                            -- track UI state
 
-RegisterCommand('myui', function()
-    if isOpen then return end
+RegisterCommand('myui', function()                              -- /myui opens the menu
+    if isOpen then return end                                   -- already open, ignore
     isOpen = true
-    SetNuiFocus(true, true)
-    SendNUIMessage({ action = 'open' })
+    SetNuiFocus(true, true)                                     -- (focusGrabbed, cursorVisible) — both true for clickable menus
+    SendNUIMessage({ action = 'open' })                         -- tell the browser to show
 end)
 
+-- ↓ register what happens when the browser fetches /close
 RegisterNUICallback('close', function(data, cb)
     isOpen = false
-    SetNuiFocus(false, false)
+    SetNuiFocus(false, false)                                   -- give control back to the game
     SendNUIMessage({ action = 'close' })
-    cb('ok')
+    cb('ok')                                                    -- ALWAYS call cb() — the fetch hangs otherwise
 end)
 
--- CRITICAL cleanup
+-- ↓ CRITICAL: cleanup on resource stop
 AddEventHandler('onResourceStop', function(r)
     if r ~= GetCurrentResourceName() then return end
-    SetNuiFocus(false, false)
+    SetNuiFocus(false, false)                                   -- release focus or player gets stuck
 end)
 ```
 
-## Golden Rules
+`cb('ok')` is mandatory in every `RegisterNUICallback`. The browser's `fetch` is waiting for a response — if you skip `cb`, the request hangs forever.
 
-### 1. `visibility: hidden`, NOT conditional render
+---
 
-Conditional `{visible && <MyThing/>}` in React = when hidden, listeners unmount. Lua sends data, UI isn't listening yet, data lost.
+## The Golden Rules
 
-Solution: UI always mounted. Hide with CSS only.
+### 1. `visibility: hidden`, NOT conditional rendering
+
+If you write your UI in React and do `{visible && <Menu />}`:
+
+- When `visible = false`, the `<Menu />` component is **unmounted** — its `useEffect`s are gone, its message listeners are gone.
+- Lua sends `SendNUIMessage({ action: 'open' })`.
+- The handler that would set `visible = true` doesn't exist (it was inside the unmounted component).
+- **Nothing happens. UI never shows.**
+
+Instead:
+- Always render the component.
+- Hide with CSS: `visibility: hidden`.
+- React listeners stay alive even when invisible.
 
 ```jsx
 // BAD
 {visible && <Menu />}
 
 // GOOD
-<Menu style={{visibility: visible ? 'visible' : 'hidden'}} />
+<Menu style={{ visibility: visible ? 'visible' : 'hidden' }} />
 ```
 
-### 2. Always `onResourceStop` cleanup
+### 2. Always cleanup on `onResourceStop`
 
 ```lua
 AddEventHandler('onResourceStop', function(r)
@@ -173,9 +201,9 @@ AddEventHandler('onResourceStop', function(r)
 end)
 ```
 
-If you restart resource while UI open without this, focus stuck. Player can't move until F8 `restart <resource>` again.
+If you restart the resource while the UI is open, focus stays grabbed. **Player can't move until they manually `restart` the resource again from F8.** Pure rage. Always cleanup.
 
-### 3. `fetchNui` with try/catch
+### 3. Wrap `fetchNui` in try/catch
 
 ```javascript
 async function fetchNui(callback, data) {
@@ -193,9 +221,9 @@ async function fetchNui(callback, data) {
 }
 ```
 
-Error boundary around root React component too.
+CEF can hiccup. A thrown error in your fetch handler can kill the whole UI if uncaught.
 
-### 4. Escape key support
+### 4. Support ESC to close
 
 ```javascript
 window.addEventListener('keydown', (e) => {
@@ -205,24 +233,26 @@ window.addEventListener('keydown', (e) => {
 });
 ```
 
-Users expect ESC to close.
+Players expect ESC to close menus. Don't make them hunt for the X button.
 
-### 5. Disable FiveM keys when focused
+### 5. Disable game controls when UI is focused
 
-When NUI has focus, some GTA controls still fire. In Lua, if you want to disable movement while UI open:
+When NUI grabs focus, some GTA controls still fire (movement, weapon attacks). Disable them while open:
 
 ```lua
 CreateThread(function()
     while isOpen do
-        DisableControlAction(0, 30, true)    -- A/D move
-        DisableControlAction(0, 31, true)    -- W/S move
-        DisableControlAction(0, 24, true)    -- attack
+        DisableControlAction(0, 30, true)                       -- 30 = move L/R (A/D)
+        DisableControlAction(0, 31, true)                       -- 31 = move F/B (W/S)
+        DisableControlAction(0, 24, true)                       -- 24 = attack
         Wait(0)
     end
 end)
 ```
 
-## Sending Data Lua -> UI
+---
+
+## Sending Data Lua → UI
 
 ```lua
 SendNUIMessage({
@@ -232,8 +262,8 @@ SendNUIMessage({
         items = {
             { id = 'bread', price = 10 },
             { id = 'water', price = 5 },
-        }
-    }
+        },
+    },
 })
 ```
 
@@ -245,8 +275,13 @@ window.addEventListener('message', (e) => {
 });
 ```
 
-## UI -> Lua Callback
+The Lua table is serialized to JSON and arrives on the JS side as a regular object.
 
+---
+
+## Sending Data UI → Lua (Callbacks)
+
+JS:
 ```javascript
 await fetch(`https://${GetParentResourceName()}/buy`, {
     method: 'POST',
@@ -255,68 +290,85 @@ await fetch(`https://${GetParentResourceName()}/buy`, {
 });
 ```
 
+Lua:
 ```lua
 RegisterNUICallback('buy', function(data, cb)
-    TriggerServerEvent('shop:buy', data.itemId)
-    cb('ok')
+    -- data.itemId is 'bread'
+    TriggerServerEvent('shop:buy', data.itemId)                 -- forward to server
+    cb('ok')                                                    -- MANDATORY
 end)
 ```
 
-`cb` must be called. Otherwise fetch hangs on UI side.
+The Lua callback receives `data` as a table (parsed from the JSON body). `cb` is a function — call it with whatever response you want the JS side to receive.
 
-## SetNuiFocus Flags
+---
+
+## `SetNuiFocus` Flags
 
 ```lua
 SetNuiFocus(hasFocus, hasCursor)
 ```
 
-- `(true, true)` = cursor visible, can click. Use for menus.
-- `(true, false)` = focus but no cursor. Rare.
-- `(false, false)` = back to game. Use on close.
+| Combo | Effect |
+|-------|--------|
+| `(true, true)` | UI captures input, cursor visible. Menus, shops. |
+| `(true, false)` | UI captures input, no cursor. Rare. |
+| `(false, false)` | Game has focus. Always use this on close. |
 
-## Debug UI
+---
 
-- F8 console: `nui_devtools` (must be in dev convar mode)
-- Chrome DevTools URL: `chrome://inspect` with CEF discoverable
-- `console.log` works in devtools
+## Debugging NUI
 
-Convar to enable:
-```
+- **In-game:** F8 console → `nui_devtools` (requires dev mode convar)
+- **Remote:** open `chrome://inspect` in any Chromium browser while the game is running, you can see and inspect every NUI frame
+- **`console.log`** works inside the dev tools
+
+Enable dev tools in `server.cfg`:
+
+```cfg
 set nui_devtools_enabled 1
 ```
+
+---
 
 ## Common Bugs
 
 ### Black screen when UI loads
-Body not `background: transparent`. Fix CSS.
-
-### Can't close UI
-`SetNuiFocus(false, false)` not called. Or resource restarted with focus. F8: `nui_focus false false`.
+`background: transparent` is missing on `body`. Check CSS.
 
 ### UI doesn't show data
-Conditional render pattern. Switch to `visibility: hidden`.
+Conditional render pattern (`{visible && <Menu />}`) — listeners unmount. Switch to `visibility: hidden`.
+
+### Can't close UI / player can't move
+`SetNuiFocus(false, false)` not called. Or you restarted the resource while UI was open without `onResourceStop` cleanup. F8 escape: type `restart your_resource` again.
 
 ### Clicks pass through to game
-`SetNuiFocus(true, true)` missing.
+`SetNuiFocus(true, true)` not called. UI is shown but not focused.
 
-### Focus stuck after resource restart
-`onResourceStop` cleanup missing.
+### Cursor visible but clicks don't register
+The UI element has `pointer-events: none` somewhere up the tree, OR the page isn't focused. Check CSS and call `SetNuiFocus(true, true)`.
+
+---
 
 ## TL;DR
 
-- fxmanifest: `ui_page`, `files`
-- `SendNUIMessage` Lua -> UI
-- `fetch` + `RegisterNUICallback` UI -> Lua
-- `SetNuiFocus(true, true)` on open, `(false, false)` on close
-- `visibility: hidden` NOT conditional render
-- `onResourceStop` cleanup always
-- `background: transparent` on body
+- `ui_page` + `files{}` in fxmanifest
+- `SendNUIMessage` → JS, `RegisterNUICallback` → Lua
+- `SetNuiFocus(true, true)` to open, `(false, false)` to close
+- `visibility: hidden`, NOT `display: none` or conditional render
+- ALWAYS `cb('ok')` in NUI callbacks, ALWAYS `onResourceStop` cleanup
+- `background: transparent` on body or you get a black screen
+
+---
 
 ## Sources
 
-- FiveM NUI dev guide: https://docs.fivem.net/docs/scripting-manual/nui-development/
-- SetNuiFocus: https://docs.fivem.net/natives/?_0x5B98AE30
-- SendNUIMessage: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/SendNUIMessage/
-- RegisterNUICallback: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNUICallback/
+- [FiveM NUI Development Guide](https://docs.fivem.net/docs/scripting-manual/nui-development/)
+- [SetNuiFocus](https://docs.fivem.net/natives/?_0x5B98AE30) — native reference
+- [SendNUIMessage](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/SendNUIMessage/)
+- [RegisterNUICallback](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/functions/RegisterNUICallback/)
+- [GetParentResourceName](https://docs.fivem.net/docs/scripting-reference/runtimes/javascript/functions/GetParentResourceName/) — JS-side global
 
-Next: `02-react-nui.md`
+---
+
+Next: [`02-react-nui.md`](02-react-nui.md)

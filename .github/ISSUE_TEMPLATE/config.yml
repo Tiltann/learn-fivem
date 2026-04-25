@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: General FiveM Question
+    url: https://forum.cfx.re/
+    about: Ask FiveM coding questions on the official Cfx.re forum — way more eyes than here.
+  - name: FiveM Discord
+    url: https://discord.gg/fivem
+    about: Real-time community help.
+  - name: ox_lib / ox_target / ox_inventory issues
+    url: https://github.com/communityox
+    about: Report bugs in those resources directly to communityox.
+  - name: Qbox issues
+    url: https://github.com/Qbox-project/qbx_core
+    about: Report bugs in Qbox to the qbx_core repo.

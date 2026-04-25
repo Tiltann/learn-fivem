@@ -1,75 +1,142 @@
 # 01. What Is FiveM
 
-## Short Version
+## Plain English
 
-FiveM = mod for GTA V that lets people run custom multiplayer servers. You keep base game, FiveM replaces GTA Online with your own stuff. Custom scripts, maps, vehicles, jobs, mechanics.
+FiveM is a **modification for GTA V** that lets people run their own multiplayer servers with custom rules, scripts, vehicles, jobs, and maps. You keep the base game (graphics, physics, the city of Los Santos), but instead of connecting to Rockstar's GTA Online servers, you connect to a community-run server.
+
+If you've heard of "GTA RP", "NoPixel", or seen Twitch streamers playing as cops/criminals on a custom server — that's FiveM.
+
+---
 
 ## Why FiveM Exists
 
-GTA Online = Rockstar's thing. Closed. You can't add cops that actually arrest, can't add real jobs, can't roleplay. FiveM fixes that.
+GTA Online is closed. You can't:
+- Add cops that actually arrest players
+- Add real jobs (mechanic, pizza delivery, paramedic)
+- Change the economy
+- Run roleplay rules
 
-FiveM splits game into:
-- **Base game** (GTA V on your disk). Graphics, physics, map.
-- **Server layer** (FiveM runtime). Runs your custom scripts.
+FiveM solves that by splitting the game into two layers:
 
-Server tells game what to do. Game renders it. Player sees it.
+- **The base game** (GTA V on your hard drive) — graphics, physics, the city itself, the gameplay engine.
+- **The server layer** (the FiveM runtime) — runs custom Lua/JS/C# scripts that tell the game what to do.
+
+The server says "spawn this car here, give this player money, open this menu." The game renders it. The player sees it.
+
+---
 
 ## Architecture
 
+A simplified diagram of what's actually happening:
+
 ```
-┌──────────┐      ┌──────────────┐
-│  Player  │ ───► │ FiveM client │ ──► GTA V game
-│  PC      │      │ + your .lua  │
-└──────────┘      └──────────────┘
-                         │
-                         │ network
-                         ▼
-                  ┌──────────────┐
-                  │ FiveM server │
-                  │ + your .lua  │
-                  │ + MySQL      │
-                  └──────────────┘
+┌──────────────┐      ┌────────────────────┐
+│   Player PC  │ ───► │  FiveM CLIENT      │ ──► GTA V game engine
+│              │      │  + your client.lua │     (renders graphics)
+└──────────────┘      └────────────────────┘
+                              │
+                              │ network (TCP/UDP)
+                              ▼
+                       ┌────────────────────┐
+                       │  FiveM SERVER      │
+                       │  + your server.lua │
+                       │  + MySQL database  │
+                       └────────────────────┘
 ```
 
-Server runs 24/7. Clients join/leave. Each script has pieces on both sides.
+The server runs 24/7. Clients connect when players join, disconnect when they leave. **Most of your scripts have a piece on each side** — client-side for what the player sees and does, server-side for the trusted source-of-truth (money, items, etc.).
+
+---
 
 ## What You Actually Code
 
-Three places:
+Three places code lives:
 
-1. **Client Lua**. Runs on player PC. Draws UI, reads input, calls game natives to spawn cars, plays sounds.
-2. **Server Lua**. Runs on server. Authoritative. Owns money, inventory, DB. Validates everything client sends.
-3. **NUI (HTML/JS/React)**. Player-facing UI rendered by embedded Chromium. Like a browser inside the game.
+### 1. Client Lua
+Runs on the **player's PC**. Has access to the GTA V game engine through "natives" (more on those later).
 
-## Why Lua
+What it does:
+- Draws UI on screen
+- Reads keyboard/mouse input
+- Spawns vehicles visually
+- Plays sounds and animations
+- **Sends events to the server** when something needs to be saved or validated
 
-FiveM picked Lua. Fast, simple, embeddable. You don't pick, you use it. Later folders teach it.
+### 2. Server Lua
+Runs on the **server machine**. Owns all the trusted state (money, inventory, jobs, who is in what gang).
 
-Server can also run JS/TS and C#. FiveM Lua = 99% of community code. Start there.
+What it does:
+- Reads/writes the database
+- Validates what clients send
+- Decides if a player can do something
+- **Sends events to one or more clients** to tell them what to display
 
-## Resources
+### 3. NUI (HTML / JS / React)
+Runs on the **player's PC inside an embedded Chromium browser**. This is your fancy menus, phones, HUDs, shops.
 
-Everything = a resource. Resource = folder with `fxmanifest.lua` + scripts. Server loads resources from `resources/` folder when `ensure resource_name` in `server.cfg`.
+NUI talks to client Lua via messages. Client Lua talks to server Lua via events. That's the chain.
 
-Examples:
-- `qbx_core` = framework resource
-- `ox_lib` = shared library resource
-- `my_shop` = your custom shop resource
-- `ox_inventory` = inventory resource
+---
 
-Folder covered later: `01-basics/04-resources-and-fxmanifest.md`.
+## Why Lua?
+
+FiveM picked Lua as the main language because it's:
+- **Small** — you can learn enough to read code in 30 minutes
+- **Fast** — embedded into the game engine, low overhead
+- **Easy to embed** — Rockstar already used it for some things, so the integration is smooth
+
+You don't get a choice — if you want to write FiveM scripts, you write Lua. The server can also run JavaScript/TypeScript and C#, but **99% of community code is Lua**, so start there.
+
+---
+
+## What's a "Resource"?
+
+**Everything in FiveM is a resource.**
+
+A resource = a folder containing a file called `fxmanifest.lua` plus your scripts.
+
+Example folder layout:
+
+```
+resources/
+└── my_shop/
+    ├── fxmanifest.lua         ← required, declares what this resource is
+    ├── client/
+    │   └── main.lua           ← runs on the player's PC
+    ├── server/
+    │   └── main.lua           ← runs on the server
+    └── shared/
+        └── config.lua         ← runs on both sides
+```
+
+The server loads a resource when it sees `ensure my_shop` in `server.cfg`. Stop the server, no resource. Start the server, all `ensure`d resources boot up.
+
+Real-world resources you'll see:
+- `qbx_core` — the Qbox framework itself
+- `ox_lib` — the utility library every other resource uses
+- `ox_inventory` — handles items and storage
+- `my_custom_shop` — something you'd build
+
+We dig into `fxmanifest.lua` in detail in lesson [`04-resources-and-fxmanifest.md`](04-resources-and-fxmanifest.md).
+
+---
 
 ## TL;DR
 
-- FiveM = custom multiplayer GTA V
-- You write Lua on client + server
-- UI = HTML/React (NUI)
-- Everything = a resource
+- FiveM = mod for GTA V that runs custom multiplayer servers.
+- You write **client Lua** (player PC), **server Lua** (server), and **NUI** (HTML/React for menus).
+- All code lives inside **resources** — folders with an `fxmanifest.lua`.
+- Server is the trusted source of truth. Client is the display layer.
+
+---
 
 ## Sources
 
-- FiveM docs (intro): https://docs.fivem.net/docs/
-- Intro to resources: https://docs.fivem.net/docs/scripting-manual/introduction/introduction-to-resources/
-- Scripting manual intro: https://docs.fivem.net/docs/scripting-manual/introduction/
+- [FiveM Docs (intro)](https://docs.fivem.net/docs/) — start page
+- [Introduction to Resources](https://docs.fivem.net/docs/scripting-manual/introduction/introduction-to-resources/) — official explanation
+- [Scripting Manual Introduction](https://docs.fivem.net/docs/scripting-manual/introduction/) — broader concepts
+- [Cfx.re Forum](https://forum.cfx.re/) — community Q&A
 
-Next: `02-lua-crash-course.md`
+---
+
+Next: [`02-lua-crash-course.md`](02-lua-crash-course.md)

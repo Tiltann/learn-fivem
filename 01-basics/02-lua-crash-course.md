@@ -1,310 +1,434 @@
 # 02. Lua Crash Course
 
-Lua is small. 30 min = you know enough to read FiveM code. Here's what matters.
+## Plain English
+
+Lua is a small, fast scripting language. You can learn enough to read FiveM code in 30 minutes. This page is the cheat sheet — read it once, come back when you forget syntax.
+
+If you've used JavaScript or Python, **most things will feel familiar**. The big traps for newcomers:
+- **Arrays start at `1`, not `0`**
+- **`~=` means "not equal"** (not `!=`)
+- **`and` / `or` instead of `&&` / `||`**
+- **Only `false` and `nil` are falsy** — `0`, `""`, and empty tables are all truthy
+
+Burn those four in.
+
+---
 
 ## Variables
 
 ```lua
-local name = 'Alex'
-local age = 25
-local isAdmin = true
-local nothing = nil
+-- "local" means this variable only exists inside this file or block
+-- always use "local" — without it, you create a global, which leaks across all your code
+local name = 'Alex'           -- a string
+local age = 25                -- a number
+local isAdmin = true          -- a boolean
+local nothing = nil           -- nil = "no value", same as null/None in other languages
 ```
 
-Always use `local`. Without `local` = global = bad. Globals leak across files, cause bugs, slow runtime.
+**Why `local` matters:** if you forget it, the variable becomes a global. Globals leak between resources and cause weird bugs that take hours to find. Always `local`. Always.
+
+---
 
 ## Types
 
-- `string` → `'hi'` or `"hi"`
-- `number` → `42`, `3.14` (no int/float split)
-- `boolean` → `true`, `false`
-- `nil` → nothing / missing
-- `table` → everything else (arrays, dicts, objects)
-- `function` → functions are values
+Lua has 6 types you'll actually use:
 
-Check type:
+| Type | Example | Notes |
+|------|---------|-------|
+| `string` | `'hi'` or `"hi"` | Single or double quotes both work |
+| `number` | `42`, `3.14` | No separate int/float — all numbers |
+| `boolean` | `true`, `false` | |
+| `nil` | `nil` | "no value" |
+| `table` | `{1, 2, 3}` or `{name = 'Sam'}` | Lua's everything-data-structure |
+| `function` | `function() end` | Functions are values too |
+
+Check the type of something:
+
 ```lua
-if type(x) == 'number' then ... end
+-- type() returns a string naming the type
+if type(x) == 'number' then
+    print('x is a number')
+end
 ```
+
+---
 
 ## Strings
 
 ```lua
-local a = 'hello'
-local b = "world"
-local c = a .. ' ' .. b           -- concatenation with ..
-local d = ('hi %s, you are %d'):format(name, age)  -- sprintf style
-local e = #a                      -- length = 5
+local a = 'hello'                      -- single quotes
+local b = "world"                      -- double quotes work the same
+local c = a .. ' ' .. b                -- ".." joins strings together. result: "hello world"
+local d = ('hi %s, age %d'):format(name, age)  -- printf-style formatting
+local e = #a                           -- "#" gives length. e = 5
 ```
 
-Multi-line:
+Multi-line strings use double square brackets:
+
 ```lua
-local long = [[
-line one
-line two
+local poem = [[
+roses are red
+violets are blue
 ]]
+-- the leading/trailing newlines ARE part of the string
 ```
+
+Common string operations (called as methods using `:`):
+
+```lua
+local s = 'Hello World'
+s:lower()          -- "hello world"
+s:upper()          -- "HELLO WORLD"
+s:sub(1, 5)        -- "Hello" — substring from char 1 to 5 (1-indexed!)
+s:find('World')    -- 7, 11 — start and end indexes of the match
+s:gsub('o', '0')   -- "Hell0 W0rld", 2 — global substitute, returns new string + count
+#s                 -- 11 — length
+```
+
+---
 
 ## Numbers
 
 ```lua
-local x = 5 + 3
-local y = 10 / 3         -- 3.333
-local z = 10 // 3        -- 3 (integer divide, Lua 5.3+)
-local m = 10 % 3         -- 1 (modulo)
-local p = 2 ^ 10         -- 1024 (power)
+local x = 5 + 3        -- 8
+local y = 10 / 3       -- 3.333... (regular division, always float-like)
+local z = 10 // 3      -- 3 (integer division, drops the decimal)
+local m = 10 % 3       -- 1 (modulo / remainder)
+local p = 2 ^ 10       -- 1024 (power)
 ```
 
-No `++` operator. Use `x = x + 1`.
-
-## Tables
-
-One data structure to rule them all. Array + dict in one.
+**Lua does NOT have `++` or `+=`.** You write it out:
 
 ```lua
--- array style (1-indexed!)
+x = x + 1              -- not "x++"
+count = count + 5      -- not "count += 5"
+```
+
+---
+
+## Tables — The One Data Structure
+
+Tables are arrays + dictionaries + objects all in one. **Everything in Lua you'd build with a class, you build with a table.**
+
+### Array style
+
+```lua
+-- a list of strings, accessed by integer index starting at 1
 local items = { 'apple', 'banana', 'cherry' }
-print(items[1])    -- apple  (NOT 0!)
 
--- dict style
+print(items[1])    -- "apple"   ← FIRST element is index 1, NOT 0
+print(items[3])    -- "cherry"
+print(#items)      -- 3 (length)
+```
+
+### Dictionary style
+
+```lua
+-- key-value pairs (like a JS object or Python dict)
 local player = {
-    name = 'Sam',
-    cash = 500,
-    job = 'police',
+    name = 'Sam',          -- string key
+    cash = 500,            -- number value
+    job = 'police',        -- another string
 }
-print(player.name)
-print(player['name'])  -- same thing
 
--- nested
+print(player.name)         -- "Sam"  (dot notation, common case)
+print(player['name'])      -- "Sam"  (bracket notation, identical result)
+```
+
+### Nested tables
+
+```lua
+-- tables inside tables are how you build any complex data
 local config = {
     shop = {
-        coords = vector3(100, 200, 30),
+        coords = vector3(100, 200, 30),    -- vector3 is a built-in FiveM type
         items = { 'bread', 'water' },
     },
 }
+
+print(config.shop.coords)          -- the vector3
+print(config.shop.items[1])        -- "bread"
 ```
 
-**Lua arrays start at 1**. Not 0. Burn it in.
+**Lua arrays start at 1.** Repeat: `1`. If you write `items[0]`, you get `nil`. Burn it in.
+
+---
 
 ## Loops
 
 ```lua
--- numeric
+-- numeric for loop: i goes from 1 to 10 inclusive
 for i = 1, 10 do
-    print(i)
+    print(i)        -- prints 1, 2, 3, ..., 10
 end
 
--- step
+-- with a step (third number)
 for i = 10, 1, -1 do
-    print(i)
+    print(i)        -- prints 10, 9, 8, ..., 1
 end
 
--- array (ipairs, in order)
+-- iterate an array with ipairs (i = index, item = value)
+local items = { 'apple', 'banana', 'cherry' }
 for i, item in ipairs(items) do
-    print(i, item)
+    print(i, item)  -- prints "1 apple", "2 banana", "3 cherry"
 end
 
--- dict (pairs, any order)
+-- iterate a dictionary with pairs (key, value)
+local player = { name = 'Sam', cash = 500 }
 for key, value in pairs(player) do
-    print(key, value)
+    print(key, value)   -- prints in any order — pairs doesn't guarantee order
 end
 
--- while
+-- while loop: runs as long as the condition is true
 while condition do
-    -- body
+    -- do stuff
 end
 
--- repeat
+-- repeat loop: runs the body, THEN checks the condition
 repeat
-    -- body
-until condition
+    -- do stuff
+until done
 ```
 
-`ipairs` stops at first nil. `pairs` iterates everything. Use `ipairs` for arrays, `pairs` for dicts.
+**`ipairs` vs `pairs`:**
+- `ipairs(t)` — only walks integer keys 1, 2, 3..., stops at the first `nil`. Use for arrays.
+- `pairs(t)` — walks every key, in undefined order. Use for dictionaries.
+
+---
 
 ## Conditionals
 
 ```lua
+-- standard if/elseif/else
 if x > 5 then
     print('big')
 elseif x == 5 then
-    print('five')
+    print('exactly five')
 else
     print('small')
 end
 ```
 
-**Only `false` and `nil` are falsy**. Empty string, 0, empty table = all truthy. Important.
+**Critical Lua quirk:** only `false` and `nil` are falsy. Everything else — including `0` and `""` — is truthy.
 
 ```lua
-if 0 then print('yes') end    -- prints 'yes'!
-if '' then print('yes') end   -- prints 'yes'!
+if 0 then print('yes') end       -- this prints 'yes'!
+if '' then print('yes') end      -- this prints 'yes'!
+if false then print('yes') end   -- doesn't print
+if nil then print('yes') end     -- doesn't print
 ```
 
-Default value idiom:
+In JavaScript, `if (0)` is false. In Lua, `if 0 then` is true. Don't get burned.
+
+### The `or` default-value trick
+
+You'll see this everywhere:
+
 ```lua
+-- if "input" is nil, fall back to "guest"
 local name = input or 'guest'
 ```
+
+Equivalent to JS `input ?? 'guest'` or Python `input or 'guest'`.
+
+Reason it works: `or` returns the first truthy value, or the last value if all are falsy.
+
+---
 
 ## Functions
 
 ```lua
+-- basic function declaration (note: "local" again)
 local function add(a, b)
-    return a + b
+    return a + b           -- "return" sends a value back
 end
 
--- multiple returns
+print(add(2, 3))          -- 5
+
+-- functions can return MULTIPLE values
 local function divmod(a, b)
-    return a // b, a % b
+    return a // b, a % b   -- two return values
 end
-local q, r = divmod(17, 5)
 
--- variadic
+local quotient, remainder = divmod(17, 5)
+print(quotient, remainder) -- 3, 2
+
+-- variadic functions take any number of args via "..."
 local function sum(...)
-    local args = {...}
+    local args = {...}     -- pack varargs into a table
     local total = 0
     for _, v in ipairs(args) do
         total = total + v
     end
     return total
 end
+
+print(sum(1, 2, 3, 4))    -- 10
 ```
 
-Functions = values. Pass around like any variable.
+### Functions are values
 
 ```lua
-local function greet(name) return 'Hi ' .. name end
-local fn = greet
-print(fn('Sam'))
+-- you can store a function in a variable and pass it around
+local function greet(name)
+    return 'Hi ' .. name
+end
+
+local fn = greet           -- fn now points to the same function
+print(fn('Sam'))           -- "Hi Sam"
 ```
 
-## Anonymous functions
+### Anonymous functions
+
+These show up constantly in FiveM (event handlers, callbacks, threads):
 
 ```lua
+-- declare and use a function inline
 CreateThread(function()
     while true do
-        Wait(1000)
+        Wait(1000)         -- pause for 1 second
         print('tick')
     end
 end)
 ```
 
-Callbacks everywhere in FiveM. Get used to it.
+The whole `function() ... end` is an unnamed function passed straight to `CreateThread`.
+
+---
 
 ## Scope
 
 ```lua
-local x = 10        -- file scope
-do
-    local x = 20    -- block scope, shadows outer
-    print(x)        -- 20
+local x = 10           -- x exists in this whole file (file-level local)
+
+do                     -- "do ... end" creates a new block
+    local x = 20       -- this x is a DIFFERENT variable, just shadowing the outer one
+    print(x)           -- 20
 end
-print(x)            -- 10
+
+print(x)               -- 10 (back to the outer one)
 ```
+
+Every block (`function`, `if`, `for`, `do`) has its own scope. Variables declared `local` inside a block disappear when the block ends.
+
+---
 
 ## Nil Checks
 
 ```lua
+-- in Lua, you can do this without comparison:
 if player then
-    -- player is not nil
+    -- player is not nil and not false
 end
 
+-- check multiple things
 if player and player.cash then
-    -- both exist
+    -- both are truthy
 end
 
--- safe nav equivalent
+-- safe-navigation alternative (no real "?." in Lua)
 local cash = player and player.cash or 0
+-- ↑ if player is nil, "player and player.cash" short-circuits to nil
+-- ↑ then "or 0" gives you 0 as fallback
 ```
 
-## Common Patterns
+---
+
+## Common Patterns You'll See Everywhere
 
 ### Default parameter
+
 ```lua
 local function notify(msg, color)
-    color = color or 'white'
+    color = color or 'white'    -- if color was nil, use 'white'
     -- ...
 end
 ```
 
-### Early return
+### Early return guard
+
 ```lua
 local function process(data)
-    if not data then return end
-    if type(data) ~= 'table' then return end
-    -- actual work
+    if not data then return end                      -- nil/false guard
+    if type(data) ~= 'table' then return end         -- wrong type guard
+    -- only reach here if everything is OK
 end
 ```
 
-### Array append
+You'll write `if not X then return end` a thousand times in FiveM code. Get used to the shape.
+
+### Append to array
+
 ```lua
 local list = {}
-table.insert(list, 'a')
-list[#list + 1] = 'b'     -- equivalent, slightly faster
+table.insert(list, 'a')      -- standard library way
+list[#list + 1] = 'b'        -- shorter and slightly faster: "set the next index to b"
 ```
 
-### Array remove
-```lua
-table.remove(list, 2)     -- remove index 2
-```
-
-## String Methods
+### Remove from array
 
 ```lua
-local s = 'Hello World'
-s:lower()               -- 'hello world'
-s:upper()               -- 'HELLO WORLD'
-s:sub(1, 5)             -- 'Hello'
-s:find('World')         -- 7, 11
-s:gsub('o', '0')        -- 'Hell0 W0rld', 2
-s:len() or #s           -- 11
+table.remove(list, 2)        -- remove the value at index 2, shift everything down
 ```
+
+---
 
 ## What Lua Does NOT Have
 
-- No classes (but you can fake them with tables)
-- No null (use `nil`)
-- No switch/case (use if/elseif chain)
-- No `!=` (use `~=`)
-- No `&&`/`||` (use `and`/`or`)
-- No `++`/`--`
-- No `+=`/`-=` (standard Lua. LuaJIT some mods add it, FiveM = no)
+| Missing | What to use instead |
+|---------|---------------------|
+| Classes | Tables + functions (you "fake" classes) |
+| `null` | `nil` |
+| `switch` / `case` | `if`/`elseif` chain or a lookup table |
+| `!=` | `~=` |
+| `&&` / `\|\|` | `and` / `or` |
+| `++` / `--` | `x = x + 1` |
+| `+=` / `-=` | `x = x + 1` (some Lua mods add it, FiveM does NOT) |
+| `null-coalescing ??` | `or` (with the falsy-rules caveat) |
 
-## `~=` Not `!=`
-
-```lua
-if x ~= 5 then ... end
-```
+---
 
 ## Comments
 
 ```lua
--- single line
+-- single line comment
 
 --[[
 multi
 line
+comment
 ]]
 ```
 
+---
+
 ## Requiring Files
 
-FiveM doesn't use `require`. You list scripts in `fxmanifest.lua`. Covered in file 04.
+Other languages have `import` or `require`. **FiveM doesn't use `require` for resource files.** You list them in `fxmanifest.lua` and they all load together.
+
+Covered in lesson [`04-resources-and-fxmanifest.md`](04-resources-and-fxmanifest.md).
+
+---
 
 ## TL;DR
 
-- `local` everything
-- Arrays start at 1
-- Only `false`/`nil` are falsy
-- Tables are everything
-- `..` for string concat
-- `~=` for not equal
-- `pairs` for dict, `ipairs` for array
+- Always `local` — never leave variables unscoped
+- Arrays start at **1**, not 0
+- Only `false` and `nil` are falsy — `0` and `""` are truthy
+- Tables are everything (arrays, dicts, objects)
+- `..` joins strings, `~=` is "not equal"
+- `pairs` for dicts, `ipairs` for arrays
+- `or` for default values
+
+---
 
 ## Sources
 
-- Lua 5.4 manual: https://www.lua.org/manual/5.4/
-- FiveM Lua runtime: https://docs.fivem.net/docs/scripting-manual/runtimes/lua/
-- Programming in Lua (free online): https://www.lua.org/pil/contents.html
+- [Lua 5.4 Reference Manual](https://www.lua.org/manual/5.4/) — the official spec
+- [Programming in Lua (free book)](https://www.lua.org/pil/contents.html) — the textbook, written by Lua's creator
+- [FiveM Lua Runtime](https://docs.fivem.net/docs/scripting-reference/runtimes/lua/) — Lua-specific FiveM functions
+- [Learn X in Y Minutes — Lua](https://learnxinyminutes.com/docs/lua/) — fast cheat-sheet style intro
 
-Next: `03-client-vs-server.md`
+---
+
+Next: [`03-client-vs-server.md`](03-client-vs-server.md)

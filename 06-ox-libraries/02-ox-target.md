@@ -1,59 +1,74 @@
 # 02. ox_target
 
-**ox_target** = third-eye targeting. Player holds a key (default LEFT ALT), crosshair appears, world objects/peds/vehicles highlight with options. Modern standard for interactions.
+## Plain English
 
-## When To Use
+**ox_target** = the "third-eye" interaction system. Player holds a key (default LEFT ALT), a crosshair appears, and world objects/peds/vehicles get highlighted with clickable options. It's the modern standard for "press to interact" in FiveM — way cleaner than rolling your own "press E within 1.5m" logic.
 
-- Talking to an NPC: ped target
-- Interacting with a door / object: model or entity target
-- Shop counter, ATM: zone target
-- Entering a vehicle trunk: bone target
+If you've played any modern QBox/QBCore server, you've used this — clicking on doors, ATMs, NPCs, vehicle trunks. That's ox_target.
 
-Way cleaner than "press E while within 1.5m" logic.
+---
+
+## When To Use It
+
+- **Talking to an NPC** → ped target
+- **Interacting with a door / object** → model or entity target
+- **Shop counter, ATM** → zone target (pinned to a spot in the world)
+- **Opening a vehicle trunk** → bone target (specific car part)
+
+---
 
 ## Setup
 
+In `fxmanifest.lua`:
+
 ```lua
--- fxmanifest.lua
-dependency 'ox_target'
+dependency 'ox_target'                                          -- refuse to start without it
 ```
 
-No import needed. Use `exports.ox_target`.
+No `shared_script` needed. You use `exports.ox_target` directly.
 
-## Add Entity Target
+---
 
-Target a specific spawned entity:
+## Add Target On A Specific Entity
+
+For something YOU spawned (a shop NPC, a custom prop):
 
 ```lua
-local ped = CreatePed(...)
+local ped = CreatePed(...)                                      -- spawn the ped (covered in natives lesson)
+
+-- ↓ attach a target option to this exact entity
 exports.ox_target:addLocalEntity(ped, {
     {
-        name = 'talk_clerk',
-        icon = 'fa-solid fa-comments',
-        label = 'Talk to Clerk',
-        onSelect = function(data)
+        name = 'talk_clerk',                                    -- unique ID for this option (used to remove it later)
+        icon = 'fa-solid fa-comments',                          -- FontAwesome icon
+        label = 'Talk to Clerk',                                -- text shown when targeting
+        onSelect = function(data)                               -- runs when player clicks
+            -- data has: data.entity, data.coords, data.distance
             TriggerServerEvent('shop:open')
         end,
         canInteract = function(entity, distance, coords, name, bone)
-            return distance < 2.0
+            -- ↑ optional: hide the option dynamically. return true to show, false to hide.
+            return distance < 2.0                               -- only if within 2m
         end,
     },
 })
 ```
 
-`data` param inside `onSelect` has `.entity`, `.coords`, `.distance`.
+Remove it later:
 
-Remove:
 ```lua
 exports.ox_target:removeLocalEntity(ped, 'talk_clerk')
 ```
 
-## Add Model Target
+---
 
-All entities of a model hash:
+## Add Target On A Model (Every Entity Of That Type)
+
+Useful for props that exist all over the map (ATMs, dumpsters, mailboxes):
 
 ```lua
-exports.ox_target:addModel({`prop_atm_01`, `prop_atm_02`, `prop_atm_03`}, {
+-- ↓ this option attaches to ALL entities matching any of these model hashes
+exports.ox_target:addModel({ `prop_atm_01`, `prop_atm_02`, `prop_atm_03` }, {
     {
         name = 'use_atm',
         icon = 'fa-solid fa-credit-card',
@@ -61,147 +76,174 @@ exports.ox_target:addModel({`prop_atm_01`, `prop_atm_02`, `prop_atm_03`}, {
         onSelect = function()
             openAtmUI()
         end,
-    }
+    },
 })
 ```
 
-Good for props like ATMs, dumpsters, mailboxes. Don't need to know where they are.
+You don't need to know where every ATM in the map is — ox_target finds them by model hash automatically.
 
-## Add Global Option
+---
 
-All peds, all vehicles, all objects, all players:
+## Add Target On Every Player / Ped / Vehicle / Object
 
 ```lua
-exports.ox_target:addGlobalPed({...})
-exports.ox_target:addGlobalVehicle({...})
-exports.ox_target:addGlobalObject({...})
-exports.ox_target:addGlobalPlayer({...})
+exports.ox_target:addGlobalPed({...})           -- every ped in the world
+exports.ox_target:addGlobalVehicle({...})       -- every vehicle
+exports.ox_target:addGlobalObject({...})        -- every object
+exports.ox_target:addGlobalPlayer({...})        -- every other player's character
 ```
 
-Example: target any vehicle to check plate:
+Example: cops can check any vehicle's plate:
+
 ```lua
 exports.ox_target:addGlobalVehicle({
     {
         name = 'check_plate',
         icon = 'fa-solid fa-magnifying-glass',
         label = 'Check Plate',
-        groups = 'police',   -- job filter
+        groups = 'police',                                      -- only cops see this option
         onSelect = function(data)
             local plate = GetVehicleNumberPlateText(data.entity)
-            lib.notify({ description=plate })
+            lib.notify({ description = plate })
         end,
-    }
+    },
 })
 ```
 
-## Zone Targets
+---
 
-Target at world coords, no entity required:
+## Zone Targets — Pin To A Coordinate
+
+When there's no entity, just a spot in the world (a counter, a wall safe, a parking spot):
 
 ```lua
--- box
+-- ↓ box zone
 exports.ox_target:addBoxZone({
-    coords = vec3(100.0, 200.0, 30.0),
-    size = vec3(2.0, 2.0, 2.0),
-    rotation = 0.0,
-    debug = false,
+    coords = vec3(100.0, 200.0, 30.0),                          -- center of the box
+    size = vec3(2.0, 2.0, 2.0),                                 -- length, width, height
+    rotation = 0.0,                                              -- yaw degrees
+    debug = false,                                               -- set true to see a wireframe during dev
     options = {
-        { name = 'shop_counter', label = 'Open Shop', icon = 'fa-shop',
-          onSelect = function() openShop() end },
-    }
+        {
+            name = 'shop_counter',
+            label = 'Open Shop',
+            icon = 'fa-shop',
+            onSelect = function() openShop() end,
+        },
+    },
 })
 
--- sphere
+-- ↓ sphere zone (round)
 exports.ox_target:addSphereZone({
     coords = vec3(100.0, 200.0, 30.0),
     radius = 1.5,
-    options = { ... }
+    options = { ... },
 })
 ```
 
-`debug = true` = visible wireframe, turn on during development.
+`debug = true` shows the zone outline in-game. Turn on while developing, turn off before shipping.
 
-Remove:
+Remove a zone (if you saved its returned ID):
+
 ```lua
-exports.ox_target:removeZone('zone_id')   -- if you saved the id
+local zoneId = exports.ox_target:addBoxZone({...})
+-- later
+exports.ox_target:removeZone(zoneId)
 ```
 
-## Bone Targets
+---
 
-Vehicle trunk, hood, doors:
+## Bone Targets — Specific Vehicle Parts
+
+Target the trunk, hood, doors, windows of a car:
 
 ```lua
 exports.ox_target:addGlobalVehicle({
     {
         name = 'open_trunk',
-        bones = { 'boot' },
+        bones = { 'boot' },                                     -- only show when targeting the trunk bone
         label = 'Open Trunk',
         icon = 'fa-solid fa-box-open',
         onSelect = function(data)
+            -- ↓ open the trunk door (door index 5 = trunk)
             SetVehicleDoorOpen(data.entity, 5, false, false)
         end,
-    }
+    },
 })
 ```
 
-Bone names: `boot`, `bonnet`, `door_dside_f`, `door_dside_r`, `door_pside_f`, `door_pside_r`, `window_lf`.
+Common bone names:
+- `boot` — trunk
+- `bonnet` — hood
+- `door_dside_f` — driver's front door
+- `door_dside_r` — driver's rear door
+- `door_pside_f` — passenger front
+- `door_pside_r` — passenger rear
+- `window_lf` — front-left window
 
-## canInteract
+---
 
-Dynamic visibility of option:
+## `canInteract` — Dynamic Visibility
+
+Hide an option based on runtime state:
 
 ```lua
 canInteract = function(entity, distance, coords, name, bone)
-    if distance > 2.5 then return false end
+    if distance > 2.5 then return false end                     -- too far
     local pdata = exports.qbx_core:GetPlayerData()
-    return pdata.job.name == 'police'
+    return pdata.job.name == 'police'                            -- only cops see this
 end,
 ```
 
-Returns true = show option. False = hide.
+Returns `true` → show. `false` → hide.
 
-## groups
+---
 
-Simpler job filter:
+## `groups` — Job Filter (Shorthand)
+
+For a simple job check, `groups` is cleaner:
 
 ```lua
-groups = 'police'
-groups = { police = 0, ambulance = 0 }    -- or table with grade minimum
+groups = 'police'                                                -- only cops
+groups = { police = 0, ambulance = 0 }                           -- cops OR EMS, grade 0+ (any rank)
+groups = { police = 2 }                                          -- cops grade 2+
 ```
 
-## items
+---
 
-Only show if player has item:
+## `items` — Require An Item
+
+Only show the option if the player has a specific item:
 
 ```lua
-items = 'lockpick'
-items = { 'lockpick', 'advancedlockpick' }
-items = { lockpick = 1, screwdriver = 2 }    -- require quantities
+items = 'lockpick'                                               -- needs at least 1 lockpick
+items = { 'lockpick', 'advancedlockpick' }                       -- ANY of these
+items = { lockpick = 1, screwdriver = 2 }                        -- needs both, in those quantities
 ```
 
-Target handles the check automatically.
+ox_target checks the player's inventory automatically.
 
-## distance
+---
 
-Max distance for this option:
+## `distance` — Override Max Range
 
 ```lua
-distance = 1.5
+distance = 1.5                                                   -- 1.5m max. default = 2.0
 ```
 
-Default = 2.0.
+---
 
-## Full Example: ATM
+## Full Example — ATM With Two Options
 
 ```lua
-exports.ox_target:addModel({`prop_atm_01`, `prop_atm_02`, `prop_atm_03`, `prop_fleeca_atm`}, {
+exports.ox_target:addModel({ `prop_atm_01`, `prop_atm_02`, `prop_atm_03`, `prop_fleeca_atm` }, {
     {
         name = 'use_atm',
         icon = 'fa-solid fa-credit-card',
         label = 'Use ATM',
         distance = 1.5,
         onSelect = function()
-            TriggerEvent('bank:openATM')
+            TriggerEvent('bank:openATM')                         -- local event to bank resource
         end,
     },
     {
@@ -209,44 +251,55 @@ exports.ox_target:addModel({`prop_atm_01`, `prop_atm_02`, `prop_atm_03`, `prop_f
         icon = 'fa-solid fa-mask',
         label = 'Rob ATM',
         distance = 1.5,
-        items = 'drill',
+        items = 'drill',                                         -- need a drill in inventory
         onSelect = function(data)
+            -- ↓ pass the network ID so the server can identify this exact ATM
             TriggerServerEvent('bank:tryRobAtm', NetworkGetNetworkIdFromEntity(data.entity))
         end,
-    }
+    },
 })
 ```
 
-## Client Side Only
+---
 
-ox_target = all client. For permission-sensitive ops (money, items), the `onSelect` triggers a server event. Server re-checks everything (see event security).
+## ox_target Is Client Only
+
+The whole library runs on the client. **Permission-sensitive actions** (taking money, giving items) still need `TriggerServerEvent` and full server-side validation. The client UI is just a fancy way to fire the event — never trust that the click actually came from a legitimate context.
+
+---
 
 ## Cleanup
 
-On resource stop, remove your targets:
+On resource stop, remove your targets so they don't ghost:
 
 ```lua
 AddEventHandler('onResourceStop', function(r)
     if r ~= GetCurrentResourceName() then return end
-    exports.ox_target:removeModel(`prop_atm_01`, 'use_atm')
-    exports.ox_target:removeZone(myZoneId)
+    exports.ox_target:removeModel(`prop_atm_01`, 'use_atm')      -- remove specific model option
+    exports.ox_target:removeZone(myZoneId)                       -- remove zone
 end)
 ```
 
-Otherwise ghost options persist until restart.
+Without this, restarting the resource leaves duplicate options floating around until the player rejoins.
+
+---
 
 ## TL;DR
 
-- `dependency 'ox_target'`, use `exports.ox_target:*`
+- `dependency 'ox_target'`. Use `exports.ox_target:*` — no shared_script.
 - `addLocalEntity`, `addModel`, `addGlobalVehicle`, `addBoxZone`, `addSphereZone`
-- `canInteract`, `groups`, `items`, `distance` for filtering
-- `bones` for car parts
-- Cleanup on resource stop
-- Never trust client, server re-checks on selection
+- `canInteract`, `groups`, `items`, `distance`, `bones` for filtering
+- Always cleanup on `onResourceStop`
+- Client side only — server still validates the action
+
+---
 
 ## Sources
 
-- ox_target docs: https://coxdocs.dev/ox_target
-- ox_target GitHub: https://github.com/overextended/ox_target
+- [ox_target docs](https://coxdocs.dev/ox_target)
+- [ox_target GitHub](https://github.com/communityox/ox_target)
+- [Vehicle bone names](https://docs.fivem.net/docs/game-references/bones/) — full list
 
-Next: `03-inventories.md`
+---
+
+Next: [`03-inventories.md`](03-inventories.md)

@@ -1,273 +1,379 @@
 # 01. Qbox Basics
 
-**Qbox** (`qbx_core`) = modern fork of QBCore. Most active framework in the scene right now. Player objects, jobs, gangs, money, vehicles, metadata. Framework = the glue between your resource and "player state".
+## Plain English
 
-If your server runs legacy QBCore, exports differ slightly but concepts are identical. QBCore uses `QBCore.Functions.GetPlayer(src)`, Qbox uses `exports.qbx_core:GetPlayer(src)`.
+A **framework** in FiveM is the resource that owns "what is a player". It defines the player object, jobs, gangs, money, inventory hooks, character creation, and the events that fire on login/logout.
 
-## Get Player Server Side
+**Qbox (`qbx_core`)** is the most active framework in the FiveM scene right now. It's a modern fork of QBCore — same shape, same concepts, slightly cleaner API.
+
+If your server runs:
+- **Qbox** → use `exports.qbx_core:GetPlayer(src)`
+- **QBCore** (older) → use `QBCore.Functions.GetPlayer(src)` (Qbox ships a bridge so old code still works)
+- **ESX** → totally different API, this lesson doesn't cover it
+
+This lesson assumes Qbox.
+
+---
+
+## Get The Player Object (Server Side)
 
 ```lua
+-- ↓ on the server, get the framework's player object for a given source
 local player = exports.qbx_core:GetPlayer(src)
+
+-- ↓ ALWAYS check it's not nil. Player can be nil if they're still connecting/loading.
 if not player then return end
 
-print(player.PlayerData.citizenid)           -- unique ID
-print(player.PlayerData.license)             -- license identifier
-print(player.PlayerData.name)                -- char name
+-- ↓ player.PlayerData = the full data blob for this player
+print(player.PlayerData.citizenid)               -- unique per-character ID, like "ABC12345"
+print(player.PlayerData.license)                 -- per-player ID across all characters
+print(player.PlayerData.name)                    -- character display name
 print(player.PlayerData.charinfo.firstname)
 print(player.PlayerData.charinfo.lastname)
-print(player.PlayerData.money.cash)
-print(player.PlayerData.money.bank)
-print(player.PlayerData.job.name)            -- 'police', 'unemployed', etc.
-print(player.PlayerData.job.grade.level)     -- 0, 1, 2...
-print(player.PlayerData.job.isboss)          -- boolean
-print(player.PlayerData.gang.name)
-print(player.PlayerData.metadata.hunger)     -- custom stats
+print(player.PlayerData.money.cash)              -- cash in pocket
+print(player.PlayerData.money.bank)              -- bank account
+print(player.PlayerData.job.name)                -- current job: 'police', 'unemployed', etc.
+print(player.PlayerData.job.grade.level)         -- grade rank: 0, 1, 2, ...
+print(player.PlayerData.job.isboss)              -- true if this is a boss-level grade
+print(player.PlayerData.gang.name)               -- gang affiliation
+print(player.PlayerData.metadata.hunger)         -- custom stats stored as JSON
 ```
+
+---
 
 ## Money Functions
 
+Money operations are atomic — Qbox handles internal locks so concurrent calls don't dupe.
+
 ```lua
 local player = exports.qbx_core:GetPlayer(src)
 
--- add
+-- ↓ ADD money. account type ('cash' or 'bank'), amount, reason string for logs
 player.Functions.AddMoney('cash', 100, 'reason string')
 player.Functions.AddMoney('bank', 500, 'salary')
 
--- remove. Returns true if had enough, false if not.
+-- ↓ REMOVE money. RETURNS BOOLEAN: true if had enough, false if short.
+-- ALWAYS check the return value.
 local ok = player.Functions.RemoveMoney('cash', 80, 'buy_gun')
-if not ok then return end
+if not ok then
+    -- player didn't have $80, abort
+    return
+end
 
--- get
-local cash = player.PlayerData.money.cash
--- or
-local cash = player.Functions.GetMoney('cash')
+-- ↓ READ money. two equivalent ways:
+local cash = player.PlayerData.money.cash        -- direct access
+local cash2 = player.Functions.GetMoney('cash')  -- via function
 
--- set (rare, use add/remove normally)
+-- ↓ SET money to a specific value. Rare. Usually use Add/Remove.
 player.Functions.SetMoney('cash', 1000, 'admin set')
 ```
 
-Money functions are atomic. Internal lock prevents dupes.
+**Reason strings** matter — they go to logs. Be specific: `'shop_buy_gun'`, `'police_salary_grade2'`, `'admin_giveall'`. Future-you will thank current-you.
 
-**Reason string** = for logs. Write something meaningful: `'shop_buy_gun'`, `'police_salary'`, `'admin_give'`.
+---
 
 ## Job Functions
 
 ```lua
--- set job
-player.Functions.SetJob('police', 2)          -- name, grade level
+-- ↓ change a player's job (e.g., they got hired)
+player.Functions.SetJob('police', 2)             -- name, grade level
 
--- set duty (police on/off)
-player.Functions.SetJobDuty(true)
+-- ↓ toggle on-duty / off-duty (police, EMS, etc.)
+player.Functions.SetJobDuty(true)                -- true = on duty
 
--- reading already shown above via PlayerData
+-- reading job state was shown above via PlayerData
 ```
 
-## Client Side: Get Player Data
+---
+
+## Get Player Data (Client Side)
+
+The client has a synced copy of its own player data. It's automatically updated when the server changes it.
 
 ```lua
 local QBX = exports.qbx_core
 local pdata = QBX:GetPlayerData()
 
 print(pdata.citizenid)
-print(pdata.money.cash)
+print(pdata.money.cash)                          -- WARNING: this is for display only
 print(pdata.job.name)
 ```
 
-Client gets a synced copy. Updated automatically when server changes it.
+**Don't trust client PlayerData for security decisions.** Players can edit client Lua to fake values. Only the server's PlayerData is authoritative.
 
-## Client Events: Data Updates
+---
+
+## Client Events: React To Data Changes
+
+Qbox fires events when player data changes:
 
 ```lua
+-- ↓ fires when the player's job changes
 RegisterNetEvent('QBCore:Client:OnJobUpdate', function(job)
     print('job changed to:', job.name)
+    -- update HUD, refresh menus, etc.
 end)
 
+-- ↓ fires when the player finishes loading their character
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
-    print('player loaded')
+    print('player loaded — safe to start client logic')
 end)
 
+-- ↓ fires whenever money changes. type = 'cash'/'bank', amount = delta, isRemoved = true/false
 RegisterNetEvent('QBCore:Client:OnMoneyChange', function(type, amount, isRemoved)
-    print(type, amount, isRemoved)
+    print(('money changed: %s %s%d'):format(type, isRemoved and '-' or '+', amount))
 end)
 ```
 
-Qbox keeps QB event names for compat. Still fire.
+Qbox keeps the old QBCore event names for compatibility.
 
-Newer Qbox events:
+Newer Qbox-specific events:
+
 ```lua
 RegisterNetEvent('qbx_core:client:playerLoaded', function(data) end)
 RegisterNetEvent('qbx_core:client:playerLoggedOut', function() end)
 ```
 
-Use newer when available.
+Use the newer ones when available.
 
-## Server Events
+---
+
+## Server Events: Player Lifecycle
 
 ```lua
+-- ↓ fires when a player loads their character
 AddEventHandler('QBCore:Server:OnPlayerLoaded', function(player)
-    -- fired when player logs in and their character loads
+    -- player object is passed in. Set up per-player state, send initial data, etc.
 end)
 
+-- ↓ fires when a player disconnects
 AddEventHandler('QBCore:Server:OnPlayerUnload', function(src)
-    -- fired when they log out
+    -- cleanup per-player state, save anything you cached
 end)
 ```
 
-## Job Checks
+---
+
+## Job / Permission Checks
 
 ```lua
--- server
+-- ↓ SERVER side check (the trusted one)
 local player = exports.qbx_core:GetPlayer(src)
-if player.PlayerData.job.name ~= 'police' then return end
-if player.PlayerData.job.grade.level < 2 then return end
+if not player then return end
+if player.PlayerData.job.name ~= 'police' then return end       -- must be police
+if player.PlayerData.job.grade.level < 2 then return end        -- must be grade 2 or higher
 
--- client
+-- ↓ CLIENT side check (UX hint only — server is the gatekeeper)
 local pdata = exports.qbx_core:GetPlayerData()
 local isCop = pdata.job.name == 'police'
 ```
 
-## Metadata (Custom State)
+**Repeat the lesson: client checks are UX, server checks are security.**
 
-Metadata = per-player custom storage. Stats like hunger, thirst, stress.
+---
+
+## Metadata (Custom Player State)
+
+`metadata` is a free-form table stored per-player and persisted to the DB. Use it for hunger, thirst, stress, custom stats:
 
 ```lua
--- read
-local hunger = player.PlayerData.metadata.hunger or 100
+-- ↓ READ
+local hunger = player.PlayerData.metadata.hunger or 100         -- default 100 if not set yet
 
--- write
-player.Functions.SetMetaData('hunger', 80)
+-- ↓ WRITE (server side)
+player.Functions.SetMetaData('hunger', 80)                      -- this also auto-saves to DB
 
--- client read
+-- ↓ READ on client (synced copy)
 local pdata = QBX:GetPlayerData()
 print(pdata.metadata.hunger)
 ```
 
-Saved to DB. Persists.
+Anything you set with `SetMetaData` persists across sessions.
+
+---
 
 ## Identifiers
 
-Players have multiple identifiers. License = stable, used for accounts.
+A player has multiple identifiers. Each is stable in different ways:
 
 ```lua
--- server
-local license = GetPlayerIdentifierByType(src, 'license')
-local steam = GetPlayerIdentifierByType(src, 'steam')
-local discord = GetPlayerIdentifierByType(src, 'discord')
-local fivem = GetPlayerIdentifierByType(src, 'fivem')
-local ip = GetPlayerEndpoint(src)
+-- ↓ on the server, given a src
+local license = GetPlayerIdentifierByType(src, 'license')       -- stable per FiveM account
+local steam = GetPlayerIdentifierByType(src, 'steam')           -- only if connected via Steam
+local discord = GetPlayerIdentifierByType(src, 'discord')       -- only if Discord linked
+local fivem = GetPlayerIdentifierByType(src, 'fivem')           -- forum account
+local ip = GetPlayerEndpoint(src)                                -- their IP:port
 ```
 
-Citizenid = generated on character creation. Use for in-game things.
-License = use for player-level (all their characters).
+| Identifier | Stable across | Use for |
+|------------|---------------|---------|
+| `citizenid` | One character | In-game things tied to a character |
+| `license` | All characters of one player | Player-level data, ban lists |
+| `steam` | Steam account | Optional, not all players have it |
+| `discord` | Discord account | Optional |
+
+For ban lists, use **license** (survives character deletion).
+For in-game money, jobs, items, use **citizenid**.
+
+---
 
 ## Get All Online Players
 
 ```lua
--- server
-local players = exports.qbx_core:GetQBPlayers()    -- table keyed by src
+-- ↓ Qbox helper: returns a table indexed by source
+local players = exports.qbx_core:GetQBPlayers()
 for src, player in pairs(players) do
     print(src, player.PlayerData.citizenid)
 end
 
--- or via FiveM
-for _, pid in ipairs(GetPlayers()) do
-    local p = exports.qbx_core:GetPlayer(tonumber(pid))
-    if p then ... end
+-- ↓ alternative: use FiveM's GetPlayers() and resolve each
+for _, pidStr in ipairs(GetPlayers()) do
+    local p = exports.qbx_core:GetPlayer(tonumber(pidStr))
+    if p then
+        -- do something with p
+    end
 end
 ```
 
-## Get Offline Player
+---
+
+## Get An Offline Player
 
 ```lua
+-- ↓ load a player object for someone NOT currently online (admin tools, audits)
 local p = exports.qbx_core:GetOfflinePlayer(citizenid)
 ```
 
-Useful for admin tools. Not automatic, does DB read.
+This does a DB read. Don't call it in a tight loop.
+
+---
 
 ## Notifications
 
-QB had `QBCore.Functions.Notify(src, msg, type)`. Prefer ox_lib if installed:
+Qbox doesn't ship a notification system itself anymore — use **ox_lib** (covered next folder):
 
 ```lua
--- server -> client
+-- ↓ from server to a specific client
 TriggerClientEvent('ox_lib:notify', src, {
     title = 'Shop',
     description = 'You bought bread',
-    type = 'success',
+    type = 'success',                                            -- success / error / inform / warning
 })
 
--- client directly
-lib.notify({ title='Hi', description='Msg', type='inform' })
+-- ↓ directly on the client
+lib.notify({
+    title = 'Hi',
+    description = 'Hello there',
+    type = 'inform',
+})
 ```
 
-Types: `success`, `error`, `inform`, `warning`.
+---
 
 ## Commands With Permission
 
 ```lua
--- server
+-- ↓ Qbox helper: register a command, last arg is the required permission group
 exports.qbx_core:CreateCommand('adminpanel', 'Open admin panel', {}, false, function(source, args)
-    -- command logic
-end, 'admin')    -- last arg = required permission group
+    -- ↑ source = who ran it, args = arg table
+    -- command body
+end, 'admin')                                                    -- requires the 'admin' group
 ```
 
-Or use `RegisterCommand` with ACE:
+Or use FiveM's `RegisterCommand` with **ACE** (Access Control Entries) for permissions:
+
 ```lua
+-- ↓ true = restricted to ACE-allowed players only
 RegisterCommand('adminpanel', function(source, args)
-    -- ...
-end, true)    -- true = restricted, must have command.adminpanel ACE
-
--- in server.cfg:
--- add_ace group.admin command.adminpanel allow
+    -- command body
+end, true)
 ```
 
-## Items (via Inventory)
+```cfg
+# in permissions.cfg
+add_ace group.admin command.adminpanel allow
+```
 
-Qbox doesn't store items. Your inventory resource does (ox_inventory, qb-inventory, tgiann-inventory, etc).
+ACE is FiveM's built-in permission system. More granular than framework groups.
+
+---
+
+## Items (Via The Inventory Resource)
+
+Qbox **doesn't** store items itself. Your inventory resource does (ox_inventory, qb-inventory, tgiann-inventory, etc.). To give an item:
 
 ```lua
--- ox_inventory example
+-- ↓ ox_inventory example. exports vary per inventory resource.
 exports.ox_inventory:AddItem(src, 'bread', 5)
 ```
 
-Exports vary per inventory. Check your inventory's README.
+Each inventory resource has its own export names. Always check that resource's docs.
 
-More: `06-ox-libraries/03-inventories.md`.
+Full inventory deep-dive: [`06-ox-libraries/03-inventories.md`](../06-ox-libraries/03-inventories.md).
 
-## QB Bridge
+---
 
-Some resources use old QBCore API. Qbox ships with a QB bridge so `QBCore = exports['qb-core']:GetCoreObject()` can still work. Prefer native Qbox exports for new code.
+## QB Bridge (Legacy Compat)
+
+Some older resources expect QBCore's API:
+
+```lua
+local QBCore = exports['qb-core']:GetCoreObject()
+QBCore.Functions.GetPlayer(src)
+```
+
+Qbox ships a **bridge** that maps these calls onto Qbox's underlying functions. **Old code still works on Qbox servers.** For new code, prefer the native Qbox exports.
+
+---
 
 ## Common Mistakes
 
 ### 1. Mutating PlayerData directly
+
 ```lua
--- BAD
-player.PlayerData.money.cash = 500   -- NOT persisted
--- GOOD
+-- ↓ BAD: this changes the local table but doesn't persist or sync
+player.PlayerData.money.cash = 500
+
+-- ↓ GOOD: use the framework function
 player.Functions.SetMoney('cash', 500, 'reason')
 ```
 
-### 2. Forgetting `if not player then return end`
-Player can be nil if just connecting or disconnecting.
+### 2. Forgetting the nil check
 
-### 3. Using client PlayerData for decisions that matter
-Client PlayerData = view of state. Can be edited. Use server PlayerData for security checks.
+```lua
+local player = exports.qbx_core:GetPlayer(src)
+if not player then return end                                   -- ALWAYS this line. ALWAYS.
+```
+
+`player` is `nil` if the player just connected and hasn't finished loading. Skipping the check = `attempt to index a nil value` error.
+
+### 3. Trusting client PlayerData
+
+Client PlayerData is for display. **Authoritative checks happen server-side.** A modded client can fake any value in client PlayerData.
+
+---
 
 ## TL;DR
 
-- `exports.qbx_core:GetPlayer(src)` server
-- `exports.qbx_core:GetPlayerData()` client
-- Money: `AddMoney`, `RemoveMoney`, `.money.cash/.bank`
+- `exports.qbx_core:GetPlayer(src)` server side — always check for nil
+- `exports.qbx_core:GetPlayerData()` client side — for display only
+- Money: `AddMoney`, `RemoveMoney` (returns bool!), read `.money.cash` / `.money.bank`
 - Job: `.job.name`, `.job.grade.level`, `SetJob`
 - Metadata: `.metadata.x`, `SetMetaData`
-- citizenid = in-game ID, license = player-level
-- `ox_lib:notify` over QB notify
+- citizenid = per-character ID. license = per-player ID.
+- Notifications: `ox_lib:notify` event or `lib.notify` direct
+- Items: through your inventory resource, not the framework
+
+---
 
 ## Sources
 
-- Qbox docs: https://docs.qbox.re/
-- qbx_core GitHub: https://github.com/Qbox-project/qbx_core
-- QBCore (legacy, similar API): https://docs.qbcore.org/
+- [Qbox Docs](https://docs.qbox.re/)
+- [qbx_core GitHub](https://github.com/Qbox-project/qbx_core) — read the source
+- [QBCore Docs (legacy)](https://docs.qbcore.org/) — same shape, older API
+- [GetPlayerIdentifierByType native](https://docs.fivem.net/natives/?_0xA61C8FCDFF1206F4)
+- [Resource ACE (permissions)](https://docs.fivem.net/docs/server-manual/setting-up-a-server/#permissions)
 
-Next folder: `06-ox-libraries/`
+---
+
+Next folder: [`06-ox-libraries/`](../06-ox-libraries/) — start with [`01-ox-lib.md`](../06-ox-libraries/01-ox-lib.md)

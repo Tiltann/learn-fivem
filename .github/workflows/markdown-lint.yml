@@ -1,0 +1,32 @@
+name: Markdown Lint
+
+# Light lint on PRs to catch obvious markdown formatting issues.
+
+on:
+  pull_request:
+    paths:
+      - '**.md'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint markdown
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: '**/*.md'
+          config: |
+            {
+              "default": true,
+              "MD013": false,
+              "MD024": false,
+              "MD033": false,
+              "MD041": false,
+              "MD046": false
+            }
+        continue-on-error: true

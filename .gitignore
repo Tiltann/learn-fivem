@@ -1,0 +1,40 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+*.iml
+.cursor/
+
+# Node / Vite (in case lessons add example NUI projects)
+node_modules/
+dist/
+build/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Lua language server cache
+.luarc.json.bak
+.luac
+*.luac
+
+# FiveM-specific (cached resources, server artifacts)
+cache/
+resources/cache/
+*.sql.bak
+
+# Env files (just in case anyone drops one)
+.env
+.env.local
+.env.*.local
+
+# Misc
+*.tmp
+*.temp
+.tmp/

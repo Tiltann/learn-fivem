@@ -1,0 +1,38 @@
+name: Link Check
+
+# Runs every Sunday + on PRs that touch markdown files.
+# Helps catch dead doc links before beginners hit a 404.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+  pull_request:
+    paths:
+      - '**.md'
+  schedule:
+    - cron: '0 6 * * 0'   # Sundays at 06:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run lychee link checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # exclude FiveM dynamic native search URLs (?_0xHASH) — they're alive but lychee 404s them
+          args: >-
+            --no-progress
+            --max-concurrency 8
+            --accept 200,206,301,302,403,429
+            --exclude-path .git
+            --exclude '^https://docs\.fivem\.net/natives/\?_0x'
+            './**/*.md'
+          fail: true

@@ -1,17 +1,22 @@
 # 02. Optimization Patterns
 
-Beyond waits. Patterns that cut CPU without cutting features.
+## Plain English
+
+Beyond `Wait` discipline (previous file), there's a set of patterns that cut CPU without cutting features. Apply them as you write — easier than retrofitting later.
+
+---
 
 ## 1. Cache Expensive Reads
 
-Don't call the same native over and over in one frame.
+Don't call the same native multiple times in one tick.
 
 ### Bad
+
 ```lua
 CreateThread(function()
     while true do
-        if IsPedInAnyVehicle(PlayerPedId(), false) then
-            if GetVehicleClass(GetVehiclePedIsIn(PlayerPedId(), false)) == 18 then
+        if IsPedInAnyVehicle(PlayerPedId(), false) then                 -- native call 1
+            if GetVehicleClass(GetVehiclePedIsIn(PlayerPedId(), false)) == 18 then  -- 3 more calls
                 -- emergency vehicle
             end
         end
@@ -20,13 +25,16 @@ CreateThread(function()
 end)
 ```
 
+Four native calls per tick. Most of them resolve to the same handles.
+
 ### Good
+
 ```lua
 CreateThread(function()
     while true do
-        local ped = PlayerPedId()
+        local ped = PlayerPedId()                                       -- one call, cache it
         if IsPedInAnyVehicle(ped, false) then
-            local veh = GetVehiclePedIsIn(ped, false)
+            local veh = GetVehiclePedIsIn(ped, false)                   -- one call, cache it
             if GetVehicleClass(veh) == 18 then
                 -- emergency
             end
@@ -36,170 +44,202 @@ CreateThread(function()
 end)
 ```
 
-Call once, store in local.
+Half the native calls. Same logic.
 
-## 2. Locals Are Faster Than Globals
+---
+
+## 2. Locals Beat Globals In Hot Loops
 
 ```lua
--- BAD
+-- BAD: math.floor is a global lookup every call (1000 hash lookups)
 for i = 1, 1000 do
     print(math.floor(i / 2))
 end
 
--- GOOD
+-- GOOD: cache the function once. local stack access in the loop.
 local floor = math.floor
 for i = 1, 1000 do
     print(floor(i / 2))
 end
 ```
 
-Local var = direct stack access. Global = hash lookup each time. Matters in hot loops.
+Local variables are direct stack reads. Globals are hash table lookups. In hot loops, the difference adds up.
 
-## 3. State Bags Over Net Events For Sync
+---
 
-If you're continuously updating state on all clients, state bags beat event spam.
+## 3. State Bags Over Net Event Spam
+
+If you're continuously syncing some state to all clients, **state bags** beat firing net events 10× per second.
 
 ```lua
--- server sets
-Entity(vehicle).state:set('fuel', 75, true)       -- replicated
+-- ↓ on the server, set state on the entity. "true" = replicate to all clients.
+Entity(vehicle).state:set('fuel', 75, true)
 Player(src).state:set('stress', 42, true)
 
--- clients read (event or poll)
+-- ↓ clients read it (synced automatically)
 local fuel = Entity(vehicle).state.fuel
 ```
 
-State bags auto-replicate and auto-cleanup on disconnect. See FiveM docs.
+State bags auto-replicate on change and clean up on disconnect. Use for fuel, stress, ownership flags, anything continuous.
 
-## 4. Ignore Irrelevant Updates
+[State Bags docs](https://docs.fivem.net/docs/scripting-manual/networking/state-bags/)
+
+---
+
+## 4. Early Return On "Nothing To Do"
 
 ```lua
 lib.onCache('ped', function(newPed)
-    if not newPed then return end
-    -- only react to actual ped changes, not every check
+    if not newPed then return end                                       -- ped is nil, skip
+    -- only react when there's actually a new ped
 end)
 ```
 
-Most update handlers fire often. Early-return on "nothing to do".
+Most update handlers fire often. Early-exit on the boring cases first.
+
+---
 
 ## 5. Batch DB Writes
 
 Writing on every coin earned = tons of tiny queries.
 
 ### Bad
+
 ```lua
-function onCoinEarn(src)
-    MySQL.update('UPDATE players SET coins = coins + 1 WHERE cid = ?', {getCid(src)})
+local function onCoinEarn(src)
+    MySQL.update('UPDATE players SET coins = coins + 1 WHERE cid = ?', { getCid(src) })
 end
 ```
 
-### Good: batch with periodic flush
-```lua
-local dirty = {}
+If 50 players earn 10 coins/min, that's 500 queries/min just for "+1 coin".
 
-function onCoinEarn(src)
+### Good — In-Memory Queue + Periodic Flush
+
+```lua
+local dirty = {}                                                        -- cid → pending coin delta
+
+local function onCoinEarn(src)
     local cid = getCid(src)
-    dirty[cid] = (dirty[cid] or 0) + 1
+    dirty[cid] = (dirty[cid] or 0) + 1                                  -- bump the counter
 end
 
 CreateThread(function()
     while true do
-        Wait(30000)    -- flush every 30s
+        Wait(30000)                                                     -- flush every 30s
         for cid, amount in pairs(dirty) do
-            MySQL.update('UPDATE players SET coins = coins + ? WHERE cid = ?', {amount, cid})
+            MySQL.update('UPDATE players SET coins = coins + ? WHERE cid = ?', { amount, cid })
             dirty[cid] = nil
         end
     end
 end)
 
--- flush on disconnect
+-- ↓ flush a player's pending counter on disconnect (don't lose their coins)
 AddEventHandler('playerDropped', function(src)
     local cid = getCid(src)
     if dirty[cid] then
-        MySQL.update.await('UPDATE players SET coins = coins + ? WHERE cid = ?', {dirty[cid], cid})
+        MySQL.update.await('UPDATE players SET coins = coins + ? WHERE cid = ?',
+            { dirty[cid], cid })
         dirty[cid] = nil
     end
 end)
 ```
 
-Tradeoff: 30s of coin loss on server crash. Acceptable for many games, not for money.
+Tradeoff: up to 30s of coin loss on a server crash. **Acceptable for non-money** — for actual cash, use atomic per-event writes.
+
+---
 
 ## 6. Don't Send Full Tables Every Tick
 
-Client wants player list? Don't send all 128 players' data every frame. Send on change.
+If clients want a list of players, don't broadcast the full list 10× a second. Send deltas:
 
 ```lua
--- only broadcast delta
+-- on player load: tell everyone "this player joined"
 AddEventHandler('qbx_core:server:playerLoaded', function(playerData)
     TriggerClientEvent('players:add', -1, playerData.source, playerData.charinfo.firstname)
 end)
 
+-- on disconnect: tell everyone "they left"
 AddEventHandler('playerDropped', function()
     TriggerClientEvent('players:remove', -1, source)
 end)
 ```
 
-Client maintains local list. Beats polling server.
+Each client maintains its own copy. Tiny network cost. No periodic sync needed.
 
-## 7. Avoid `GetGamePool` If Possible
+---
+
+## 7. Avoid `GetGamePool` In Hot Code
 
 ```lua
--- EXPENSIVE
+-- EXPENSIVE: traverses every vehicle the engine tracks
 for _, veh in ipairs(GetGamePool('CVehicle')) do
-    -- ...
+    -- check it
 end
 ```
 
-Iterates every vehicle tracked by game. Use ox_lib `getNearbyVehicles` with radius instead.
+For nearby entities, prefer:
+
+```lua
+local nearby = lib.getNearbyVehicles(coords, 50.0, false)               -- batched, radius-limited
+```
+
+Save `GetGamePool` for one-shot operations (cleanup on resource stop, debug commands), not loops.
+
+---
 
 ## 8. Use `CreateThread` Sparingly
 
-Each thread = its own coroutine + scheduler overhead. Don't spawn one per NPC:
+Each thread = its own coroutine + scheduler overhead. Don't spawn one per NPC.
 
-### Bad
+### Bad — 100 threads for 100 NPCs
+
 ```lua
 for _, npc in ipairs(npcs) do
     CreateThread(function()
         while true do
-            -- manage this npc
+            -- manage this one NPC
             Wait(1000)
         end
     end)
 end
 ```
 
-100 NPCs = 100 threads.
+### Good — one thread, iterate
 
-### Good
 ```lua
 CreateThread(function()
     while true do
         for _, npc in ipairs(npcs) do
-            -- manage each
+            -- manage each NPC in turn
         end
         Wait(1000)
     end
 end)
 ```
 
-One thread, iterate.
+One thread. Same work. Less overhead.
+
+---
 
 ## 9. Targeted Event Routing
 
 ```lua
--- BAD: broadcast to all 128 players
+-- BAD: broadcasts to all 128 connected clients
 TriggerClientEvent('shop:updated', -1, data)
 
--- GOOD: only the one who opened it
+-- GOOD: only the buyer cares
 TriggerClientEvent('shop:updated', buyerSrc, data)
 
--- GOOD: only players in a zone
+-- GOOD: only nearby players (e.g., you opened a robbery, only nearby cops should know)
 local nearby = lib.getNearbyPlayers(coords, 50.0)
 for _, src in ipairs(nearby) do
     TriggerClientEvent('shop:updated', src, data)
 end
 ```
 
-`-1` broadcast = 128x network traffic. Only when truly global.
+`-1` broadcast = 128× the network traffic. Only use it when literally every player needs the event.
+
+---
 
 ## 10. Stream Models On Demand, Unload After
 
@@ -210,24 +250,28 @@ while not HasModelLoaded(model) do Wait(0) end
 
 local veh = CreateVehicle(model, x, y, z, h, true, false)
 
-SetModelAsNoLongerNeeded(model)    -- release slot
+SetModelAsNoLongerNeeded(model)                                         -- ALWAYS release after use
 ```
 
-If you forget `SetModelAsNoLongerNeeded`, the game keeps it loaded. Memory leak + new models may fail to load.
+Forget `SetModelAsNoLongerNeeded` → memory leak, future model requests may fail because the streaming slots are full.
 
-Same for anim dicts:
+Same for animation dictionaries:
+
 ```lua
 RequestAnimDict(dict)
--- use anim
-RemoveAnimDict(dict)
+-- ... play the anim ...
+RemoveAnimDict(dict)                                                    -- release when done
 ```
+
+---
 
 ## 11. Don't Render NUI When Hidden
 
-React effect:
+Even with `visibility: hidden`, your React `useEffect`s still run. Gate expensive work:
+
 ```tsx
 useEffect(() => {
-    if (!visible) return;
+    if (!visible) return;                                               // bail when hidden
     const timer = setInterval(() => {
         setTime(Date.now());
     }, 1000);
@@ -235,20 +279,23 @@ useEffect(() => {
 }, [visible]);
 ```
 
-Don't run animations/timers behind a hidden UI. Gated mounting not always possible (use `visibility:hidden`), but gate expensive work with `if (!visible) return`.
+Don't run animations, polling, or fetches behind a hidden UI.
 
-## 12. Minimize `SendNUIMessage` Frequency
+---
+
+## 12. Throttle `SendNUIMessage`
 
 Sending every frame to NUI = expensive serialization + CEF overhead.
 
-For HUDs (HP, hunger, etc):
+For HUDs (HP, hunger, etc.):
+
 ```lua
 local lastSent = {}
 
 CreateThread(function()
     while true do
         local hp = GetEntityHealth(PlayerPedId())
-        if hp ~= lastSent.hp then
+        if hp ~= lastSent.hp then                                       -- only send when changed
             SendNUIMessage({ hp = hp })
             lastSent.hp = hp
         end
@@ -257,34 +304,42 @@ CreateThread(function()
 end)
 ```
 
-Send only when changed. Aggressive throttling on HUDs.
+Only send on **actual changes**. Aggressive throttling on HUDs is a huge win.
+
+---
 
 ## 13. Profile Before Optimizing
 
-Don't guess. Use:
-- `resmon` in game
-- `profiler record 500` + view in Chrome DevTools (F8: `profiler view`)
-- MCP `resmon_snapshot` + `benchmark_compare`
+Don't guess. Tools:
 
-Optimizing cold code = wasted effort. Find the 20% eating 80% first.
+- **`resmon`** in F8 console — quick per-resource CPU
+- **`profiler record 500` + `profiler save x.json`** — open in Chrome DevTools for flame chart
+- **MCP `resmon_snapshot` + `benchmark_compare`** — before/after numbers
+
+Optimizing cold code = wasted effort. Find the 20% of code eating 80% of CPU first.
+
+---
 
 ## 14. Lua GC Awareness
 
 Avoid creating garbage in hot loops:
 
 ```lua
--- allocates a new vector3 every frame
+-- BAD: allocates a new vector3 every frame
 while true do
     local c = vec3(1, 2, 3)
     Wait(0)
 end
 ```
 
-Prefer reusing values. Lua GC pauses = tiny hitches.
+Lua garbage collection pauses cause tiny hitches. Reuse values, hoist allocations out of hot loops.
+
+---
 
 ## 15. Compile-Time Constants
 
 ```lua
+-- ↓ ONE config table at the top, easy to find and tune
 local CONFIG = {
     SHOP_COORDS = vec3(25.0, -1347.0, 29.5),
     SHOP_RADIUS = 3.0,
@@ -292,66 +347,80 @@ local CONFIG = {
 }
 ```
 
-One config table. Avoid hardcoded magic numbers sprinkled everywhere. Easier to tune, debug, review.
+Avoid magic numbers sprinkled across the file. Easier to tune, debug, and review.
 
-## 16. Preload UI / Models On Resource Start
+---
 
-If you know you'll need assets, load once at start:
+## 16. Preload Critical Assets On Resource Start
+
+If you know you'll need a model or anim, load it once at start:
 
 ```lua
 CreateThread(function()
-    Wait(2000)    -- let game initialize
-    for _, model in ipairs({`adder`, `zentorno`}) do
+    Wait(2000)                                                          -- let the game initialize
+    for _, model in ipairs({ `adder`, `zentorno` }) do
         RequestModel(model)
         while not HasModelLoaded(model) do Wait(0) end
-        SetModelAsNoLongerNeeded(model)
+        SetModelAsNoLongerNeeded(model)                                 -- still release the slot, the game caches it
     end
 end)
 ```
 
-Models get cached. First use later = instant.
+Models become cached. First in-game use = instant.
 
-## 17. Stop Processing When Far
+---
 
-Global anti-pattern: a thread processing every resource's logic for every player all the time.
+## 17. Stop Processing When Far Away
 
-Gate by distance or by "am I involved":
+The global anti-pattern: a thread doing work for every player even when no player is involved.
 
 ```lua
 local players = lib.getNearbyPlayers(coords, 50.0)
 for _, src in ipairs(players) do
-    -- only these players care
+    -- only these players are affected by the event happening at "coords"
 end
 ```
 
-## Checklist Before Shipping
+Gate by distance, by visibility, by "am I involved". Idle work is a tax on the whole server.
 
-- [ ] No `while true do ... Wait(0) end` without gating
-- [ ] `resmon` < 0.05ms idle
-- [ ] DB writes batched or on events (not per frame)
+---
+
+## Pre-Ship Performance Checklist
+
+- [ ] No `while true do ... Wait(0) end` without distance gating or `lib.points`
+- [ ] `resmon` < 0.05 ms idle for client resources
+- [ ] DB writes batched or event-driven (not per frame)
 - [ ] No `GetGamePool` in hot loops
-- [ ] Locals in hot loops
-- [ ] State bags for continuous sync
-- [ ] Targeted `TriggerClientEvent`, not `-1` broadcast
-- [ ] `SetModelAsNoLongerNeeded` after Create
-- [ ] NUI not receiving messages every frame
-- [ ] `onResourceStop` cleanup
+- [ ] Locals cached in hot loops
+- [ ] State bags for continuous sync, not net event spam
+- [ ] Targeted `TriggerClientEvent`, not `-1` broadcast (unless truly global)
+- [ ] `SetModelAsNoLongerNeeded` after every `CreateVehicle`/`CreatePed`
+- [ ] NUI receives messages on change, not per frame
+- [ ] `onResourceStop` cleanup (NUI focus, threads, entities, blips)
+
+---
 
 ## TL;DR
 
 - Cache repeated native calls
-- Batch DB ops
+- Batch DB ops, send deltas not snapshots
 - Event-driven > polling
-- Targeted broadcasts
-- Unload assets
-- Profile with resmon + profiler
-- Gate work by distance / visibility
+- Targeted broadcasts, not `-1`
+- Unload streamed assets
+- Profile with `resmon` + `profiler`
+- Gate work by distance / visibility / "am I involved"
+
+---
 
 ## Sources
 
-- FiveM profiler: https://docs.fivem.net/docs/scripting-reference/runtimes/lua/
-- Cookbook (community performance patterns): https://cookbook.fivem.net/
-- ox_lib points (source): https://github.com/communityox/ox_lib/tree/master/imports/points
-- ox_lib zones: https://coxdocs.dev/ox_lib/Modules/Zones/Shared
+- [FiveM profiler docs](https://docs.fivem.net/docs/scripting-reference/profiler/)
+- [State Bags](https://docs.fivem.net/docs/scripting-manual/networking/state-bags/)
+- [FiveM Cookbook (performance)](https://cookbook.fivem.net/) — community patterns
+- [ox_lib points (source)](https://github.com/communityox/ox_lib/tree/master/imports/points)
+- [ox_lib zones](https://coxdocs.dev/ox_lib/Modules/Zones/Shared)
+- [Lua performance tips](https://www.lua.org/gems/sample.pdf) — official Lua perf guide
 
-Next folder: `10-first-projects/`
+---
+
+Next folder: [`10-first-projects/`](../10-first-projects/) — start with [`01-hello-resource.md`](../10-first-projects/01-hello-resource.md)
